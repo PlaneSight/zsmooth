@@ -10,6 +10,7 @@ const vscmn = @import("common/vapoursynth.zig");
 const sort = @import("common/sorting_networks.zig");
 const math = @import("common/math.zig");
 const vec = @import("common/vector.zig");
+const f16cmn = @import("common/f16.zig");
 const float_mode: std.builtin.FloatMode = if (@import("config").optimize_float) .optimized else .strict;
 
 const vs = vapoursynth.vapoursynth4;
@@ -68,7 +69,15 @@ fn Clense(comptime T: type) type {
             @setFloatMode(float_mode);
 
             if (comptime T == f16) {
-                return clenseF16(dstp, srcp, prev, next, width, height, stride);
+                return switch (@import("config").f16_simd) {
+                    .scalar => clenseScalar(dstp, srcp, prev, next, width, height, stride),
+                    .native => clenseF16Native(dstp, srcp, prev, next, width, height, stride),
+                    .widened => clenseF16(dstp, srcp, prev, next, width, height, stride),
+                    .auto => if (f16cmn.target_has_native_fp16_arithmetic)
+                        clenseF16Native(dstp, srcp, prev, next, width, height, stride)
+                    else
+                        clenseF16(dstp, srcp, prev, next, width, height, stride),
+                };
             }
 
             const V = @Vector(vec.getVecSize(T), T);
@@ -106,6 +115,28 @@ fn Clense(comptime T: type) type {
                     const c: V32 = vec.loadF16AsF32(V16, V32, srcp, offset);
                     const n: V32 = vec.loadF16AsF32(V16, V32, next, offset);
                     vec.storeF32AsF16(V16, dstp, offset, sort.median3(p, c, n));
+                }
+
+                for (column..width) |tail_column| {
+                    const offset = row_start + tail_column;
+                    dstp[offset] = sort.median3(prev[offset], srcp[offset], next[offset]);
+                }
+            }
+        }
+
+        fn clenseF16Native(noalias dstp: []f16, noalias srcp: []const f16, noalias prev: []const f16, noalias next: []const f16, width: usize, height: usize, stride: usize) void {
+            const V = @Vector(vec.getVecSize(f16), f16);
+            const vector_len = @typeInfo(V).vector.len;
+
+            for (0..height) |row| {
+                const row_start = row * stride;
+                var column: usize = 0;
+                while (column + vector_len <= width) : (column += vector_len) {
+                    const offset = row_start + column;
+                    const p = vec.load(V, prev, offset);
+                    const c = vec.load(V, srcp, offset);
+                    const n = vec.load(V, next, offset);
+                    vec.store(V, dstp, offset, sort.median3(p, c, n));
                 }
 
                 for (column..width) |tail_column| {
@@ -234,6 +265,47 @@ fn Clense(comptime T: type) type {
 
             const expected = [_]T{3} ** (height * stride);
             try std.testing.expectEqualDeep(&expected, dstp);
+        }
+
+        test "F16 native clense matches scalar with strided tail" {
+            if (comptime T != f16) return;
+
+            const width = vec.getVecSize(f16) + 3;
+            const height = 3;
+            const stride = width + 2;
+            const size = height * stride;
+            const values = [_]f16{ 0, 0.25, 0.5, 0.75, 1, 1.5, 2, 3 };
+
+            const prev = try testingAllocator.alloc(f16, size);
+            defer testingAllocator.free(prev);
+            const srcp = try testingAllocator.alloc(f16, size);
+            defer testingAllocator.free(srcp);
+            const next = try testingAllocator.alloc(f16, size);
+            defer testingAllocator.free(next);
+            const scalar = try testingAllocator.alloc(f16, size);
+            defer testingAllocator.free(scalar);
+            const native = try testingAllocator.alloc(f16, size);
+            defer testingAllocator.free(native);
+
+            for (0..size) |i| {
+                prev[i] = values[(i * 3 + 1) % values.len];
+                srcp[i] = values[(i * 5 + 2) % values.len];
+                next[i] = values[(i * 7 + 3) % values.len];
+            }
+            @memset(scalar, 0);
+            @memset(native, 0);
+
+            clenseScalar(scalar, srcp, prev, next, width, height, stride);
+            clenseF16Native(native, srcp, prev, next, width, height, stride);
+
+            for (0..height) |row| {
+                const row_start = row * stride;
+                try testing.expectEqualSlices(
+                    f16,
+                    scalar[row_start .. row_start + width],
+                    native[row_start .. row_start + width],
+                );
+            }
         }
 
         test clenseForwardBackward {
