@@ -9,6 +9,7 @@ const vec = @import("common/vector.zig");
 const vscmn = @import("common/vapoursynth.zig");
 const sort = @import("common/sorting_networks.zig");
 const gridcmn = @import("common/grid.zig");
+const f16cmn = @import("common/f16.zig");
 const float_mode: std.builtin.FloatMode = if (@import("config").optimize_float) .optimized else .strict;
 
 const vs = vapoursynth.vapoursynth4;
@@ -1540,10 +1541,12 @@ fn Repair(comptime T: type) type {
         fn useNativeF16Vector(comptime mode: u5) bool {
             if (comptime T != f16) return true;
 
-            // Keep auto compatible with the existing curated modes. The other
-            // cases are explicit measurement variants, not target policy.
+            // Auto selects all native vectors only for targets with full FP16
+            // arithmetic; otherwise it preserves the curated modes.
             return switch (@import("config").f16_simd) {
-                .auto => switch (mode) {
+                .auto => if (f16cmn.target_has_native_fp16_arithmetic)
+                    true
+                else switch (mode) {
                     1...4, 11...14, 17, 20, 22 => true,
                     else => false,
                 },

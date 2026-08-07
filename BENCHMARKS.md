@@ -70,9 +70,16 @@ bun benchmarks/compare_revisions.ts \
   --iterations 7 --warmup 1
 ```
 
-These are measurement experiments, not target policy decisions; use `--full`
-when full-stream throughput is the relevant metric.
-
+The direct-frame runs above supply bounded, target-specific evidence rather
+than a general throughput claim. `auto` uses every native-F16 vector mode for
+an AArch64 target advertising `fullfp16`; otherwise it preserves the curated
+F16 mode sets that predated this experiment. `widened` is never selected
+automatically, and Repair remains scalar in that experiment. On this Apple M5
+/ Zig 0.16.0 host, three-sample direct-frame measurements put native
+RemoveGrain at 2.430x of scalar and F32 widened compute at 0.590x of native
+across the ten F16 cases above. This is not evidence for x86 or other AArch64
+CPUs; use `--full`, more samples, counters, and disassembly before widening
+the policy.
 
 The comparison writes the legacy comparison JSON and Markdown plus
 `benchmark_comparison.metadata.json` under `build/benchmarks/` by default.

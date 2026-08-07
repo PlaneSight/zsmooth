@@ -9,6 +9,7 @@ const vscmn = @import("common/vapoursynth.zig");
 const sort = @import("common/sorting_networks.zig");
 const gridcmn = @import("common/grid.zig");
 const vec = @import("common/vector.zig");
+const f16cmn = @import("common/f16.zig");
 const float_mode: std.builtin.FloatMode = if (@import("config").optimize_float) .optimized else .strict;
 
 const vs = vapoursynth.vapoursynth4;
@@ -1469,10 +1470,12 @@ fn RemoveGrain(comptime T: type) type {
         fn f16VectorPath(comptime mode: u5) enum { scalar, native, widened } {
             if (comptime T != f16) return .native;
 
-            // Keep auto compatible with the existing curated modes. The other
-            // cases are explicit measurement variants, not target policy.
+            // Auto selects all native vectors only for targets with full FP16
+            // arithmetic; otherwise it preserves the curated modes.
             return switch (@import("config").f16_simd) {
-                .auto => switch (mode) {
+                .auto => if (f16cmn.target_has_native_fp16_arithmetic)
+                    .native
+                else switch (mode) {
                     1...4, 13...17, 20, 22 => .native,
                     else => .scalar,
                 },
@@ -1480,6 +1483,19 @@ fn RemoveGrain(comptime T: type) type {
                 .native => .native,
                 .widened => .widened,
             };
+        }
+
+        test "FP16 vector path honors target-gated configuration" {
+            if (comptime T != f16) return;
+
+            const Path = @TypeOf(f16VectorPath(5));
+            const expected: Path = switch (@import("config").f16_simd) {
+                .auto => if (f16cmn.target_has_native_fp16_arithmetic) .native else .scalar,
+                .scalar => .scalar,
+                .native => .native,
+                .widened => .widened,
+            };
+            try testing.expectEqual(expected, f16VectorPath(5));
         }
 
         fn processPlane(mode: u5, noalias srcp8: []const u8, noalias dstp8: []u8, width: usize, height: usize, stride8: usize, chroma: bool) void {
