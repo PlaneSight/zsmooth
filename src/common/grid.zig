@@ -213,6 +213,37 @@ pub fn Grid(comptime T: type) type {
     };
 }
 
+/// Loads F16 storage directly into an F32 vector grid. This is the narrow
+/// storage-to-compute boundary for kernels evaluating an F32 fallback.
+pub fn initF16AsF32(comptime V16: type, comptime V32: type, slice: []const f16, stride: usize) Grid(V32) {
+    return .{
+        .top_left = vec.loadF16AsF32(V16, V32, slice, 0),
+        .top_center = vec.loadF16AsF32(V16, V32, slice, 1),
+        .top_right = vec.loadF16AsF32(V16, V32, slice, 2),
+        .center_left = vec.loadF16AsF32(V16, V32, slice, stride),
+        .center_center = vec.loadF16AsF32(V16, V32, slice, stride + 1),
+        .center_right = vec.loadF16AsF32(V16, V32, slice, stride + 2),
+        .bottom_left = vec.loadF16AsF32(V16, V32, slice, stride * 2),
+        .bottom_center = vec.loadF16AsF32(V16, V32, slice, (stride * 2) + 1),
+        .bottom_right = vec.loadF16AsF32(V16, V32, slice, (stride * 2) + 2),
+    };
+}
+
+/// The same storage-to-compute boundary for same-field interlaced grids.
+pub fn initInterlacedF16AsF32(comptime V16: type, comptime V32: type, slice: []const f16, stride: usize) Grid(V32) {
+    return .{
+        .top_left = vec.loadF16AsF32(V16, V32, slice, 0),
+        .top_center = vec.loadF16AsF32(V16, V32, slice, 1),
+        .top_right = vec.loadF16AsF32(V16, V32, slice, 2),
+        .center_left = vec.loadF16AsF32(V16, V32, slice, stride * 2),
+        .center_center = vec.loadF16AsF32(V16, V32, slice, (stride * 2) + 1),
+        .center_right = vec.loadF16AsF32(V16, V32, slice, (stride * 2) + 2),
+        .bottom_left = vec.loadF16AsF32(V16, V32, slice, stride * 4),
+        .bottom_center = vec.loadF16AsF32(V16, V32, slice, (stride * 4) + 1),
+        .bottom_right = vec.loadF16AsF32(V16, V32, slice, (stride * 4) + 2),
+    };
+}
+
 test "Grid init" {
     const T = u8;
     const data = [9]T{

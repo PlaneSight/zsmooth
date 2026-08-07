@@ -1549,6 +1549,7 @@ fn Repair(comptime T: type) type {
                 },
                 .scalar => false,
                 .native => true,
+                .widened => false,
             };
         }
 

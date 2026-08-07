@@ -24,6 +24,7 @@ const F16SimdMode = enum {
     auto,
     scalar,
     native,
+    widened,
 };
 
 pub fn build(b: *std.Build) !void {
@@ -33,7 +34,7 @@ pub fn build(b: *std.Build) !void {
 
     const optimize_float = b.option(bool, "optimize-float", "Enables 'fast-math' optimizations for floating point arithmetic, at the expense of accuracy. Defaults to enabled/true.") orelse true;
     // Benchmark-controlled experiment: auto preserves the curated F16 dispatch.
-    const f16_simd = b.option(F16SimdMode, "f16-simd", "F16 SIMD experiment: auto, scalar, or native") orelse .auto;
+    const f16_simd = b.option(F16SimdMode, "f16-simd", "F16 SIMD experiment: auto, scalar, native, or widened") orelse .auto;
     const options = b.addOptions();
     options.addOption(bool, "optimize_float", optimize_float);
     options.addOption(F16SimdMode, "f16_simd", f16_simd);

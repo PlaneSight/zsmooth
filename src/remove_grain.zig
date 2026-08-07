@@ -783,6 +783,7 @@ fn RemoveGrain(comptime T: type) type {
         fn removegrainVector(mode: comptime_int, comptime V: type, grid: gridcmn.Grid(V), chroma: bool) V {
             const SATV = types.SignedArithmeticType(V);
             const UATV = types.UnsignedArithmeticType(V);
+            const ComputeT = @typeInfo(V).vector.child;
 
             return switch (mode) {
                 1 => @max(grid.minWithoutCenter(), @min(grid.center_center, grid.maxWithoutCenter())),
@@ -806,9 +807,9 @@ fn RemoveGrain(comptime T: type) type {
                     const c4 = @abs(cT - @as(SATV, clamp4));
                     const mindiff = @min(c1, c2, c3, c4);
 
-                    const c3_result = @select(T, mindiff == c3, clamp3, clamp1);
-                    const c2_result = @select(T, mindiff == c2, clamp2, c3_result);
-                    break :blk @select(T, mindiff == c4, clamp4, c2_result);
+                    const c3_result = @select(ComputeT, mindiff == c3, clamp3, clamp1);
+                    const c2_result = @select(ComputeT, mindiff == c2, clamp2, c3_result);
+                    break :blk @select(ComputeT, mindiff == c4, clamp4, c2_result);
                 },
                 6 => blk: {
                     const sorted = grid.minMaxOppositesWithoutCenter();
@@ -831,9 +832,9 @@ fn RemoveGrain(comptime T: type) type {
                     const c4 = @min((math.lossyCast(SATV, @abs(cT - @as(SATV, clamp4))) * ratio) + d4, maximum);
                     const mindiff = @min(c1, c2, c3, c4);
 
-                    const c3_result = @select(T, mindiff == c3, clamp3, clamp1);
-                    const c2_result = @select(T, mindiff == c2, clamp2, c3_result);
-                    break :blk @select(T, mindiff == c4, clamp4, c2_result);
+                    const c3_result = @select(ComputeT, mindiff == c3, clamp3, clamp1);
+                    const c2_result = @select(ComputeT, mindiff == c2, clamp2, c3_result);
+                    break :blk @select(ComputeT, mindiff == c4, clamp4, c2_result);
                 },
                 7 => blk: {
                     const sorted = grid.minMaxOppositesWithoutCenter();
@@ -852,9 +853,9 @@ fn RemoveGrain(comptime T: type) type {
                     const c4 = math.lossyCast(SATV, @abs(cT - @as(SATV, clamp4))) + d4;
                     const mindiff = @min(c1, c2, c3, c4);
 
-                    const c3_result = @select(T, mindiff == c3, clamp3, clamp1);
-                    const c2_result = @select(T, mindiff == c2, clamp2, c3_result);
-                    break :blk @select(T, mindiff == c4, clamp4, c2_result);
+                    const c3_result = @select(ComputeT, mindiff == c3, clamp3, clamp1);
+                    const c2_result = @select(ComputeT, mindiff == c2, clamp2, c3_result);
+                    break :blk @select(ComputeT, mindiff == c4, clamp4, c2_result);
                 },
                 8 => blk: {
                     const sorted = grid.minMaxOppositesWithoutCenter();
@@ -880,9 +881,9 @@ fn RemoveGrain(comptime T: type) type {
                     const c4 = math.clamp(math.lossyCast(SATV, @abs(cT - @as(SATV, clamp4))) + (d4 * ratio), minimum, maximum);
                     const mindiff = @min(c1, c2, c3, c4);
 
-                    const c3_result = @select(T, mindiff == c3, clamp3, clamp1);
-                    const c2_result = @select(T, mindiff == c2, clamp2, c3_result);
-                    break :blk @select(T, mindiff == c4, clamp4, c2_result);
+                    const c3_result = @select(ComputeT, mindiff == c3, clamp3, clamp1);
+                    const c2_result = @select(ComputeT, mindiff == c2, clamp2, c3_result);
+                    break :blk @select(ComputeT, mindiff == c4, clamp4, c2_result);
                 },
                 9 => blk: {
                     const sorted = grid.minMaxOppositesWithoutCenter();
@@ -896,9 +897,9 @@ fn RemoveGrain(comptime T: type) type {
                     const clamp3 = math.clamp(grid.center_center, sorted.min3, sorted.max3);
                     const clamp4 = math.clamp(grid.center_center, sorted.min4, sorted.max4);
 
-                    const c3_result = @select(T, mindiff == d3, clamp3, clamp1);
-                    const c2_result = @select(T, mindiff == d2, clamp2, c3_result);
-                    break :blk @select(T, mindiff == d4, clamp4, c2_result);
+                    const c3_result = @select(ComputeT, mindiff == d3, clamp3, clamp1);
+                    const c2_result = @select(ComputeT, mindiff == d2, clamp2, c3_result);
+                    break :blk @select(ComputeT, mindiff == d4, clamp4, c2_result);
                 },
                 10 => blk: {
                     const cT = @as(SATV, grid.center_center);
@@ -912,13 +913,13 @@ fn RemoveGrain(comptime T: type) type {
                     const d8 = math.lossyCast(SATV, @abs(cT - @as(SATV, grid.bottom_right)));
                     const mindiff = @min(d1, d2, d3, d4, d5, d6, d7, d8);
 
-                    const d5_result = @select(T, mindiff == d5, grid.center_right, grid.center_left);
-                    const d1_result = @select(T, mindiff == d1, grid.top_left, d5_result);
-                    const d3_result = @select(T, mindiff == d3, grid.top_right, d1_result);
-                    const d2_result = @select(T, mindiff == d2, grid.top_center, d3_result);
-                    const d6_result = @select(T, mindiff == d6, grid.bottom_left, d2_result);
-                    const d8_result = @select(T, mindiff == d8, grid.bottom_right, d6_result);
-                    break :blk @select(T, mindiff == d7, grid.bottom_center, d8_result);
+                    const d5_result = @select(ComputeT, mindiff == d5, grid.center_right, grid.center_left);
+                    const d1_result = @select(ComputeT, mindiff == d1, grid.top_left, d5_result);
+                    const d3_result = @select(ComputeT, mindiff == d3, grid.top_right, d1_result);
+                    const d2_result = @select(ComputeT, mindiff == d2, grid.top_center, d3_result);
+                    const d6_result = @select(ComputeT, mindiff == d6, grid.bottom_left, d2_result);
+                    const d8_result = @select(ComputeT, mindiff == d8, grid.bottom_right, d6_result);
+                    break :blk @select(ComputeT, mindiff == d7, grid.bottom_center, d8_result);
                 },
                 11, 12 => blk: {
                     const two: UATV = @splat(2);
@@ -929,7 +930,7 @@ fn RemoveGrain(comptime T: type) type {
                         two * (@as(UATV, grid.top_center) + @as(UATV, grid.center_left) + @as(UATV, grid.center_right) + @as(UATV, grid.bottom_center)) +
                         @as(UATV, grid.top_left) + @as(UATV, grid.top_right) +
                         @as(UATV, grid.bottom_left) + @as(UATV, grid.bottom_right);
-                    break :blk if (types.isFloat(T))
+                    break :blk if (types.isFloat(ComputeT))
                         sum / sixteen
                     else
                         math.lossyCast(V, (sum + eight) / sixteen);
@@ -946,9 +947,9 @@ fn RemoveGrain(comptime T: type) type {
                     const result3 = math.clamp(grid.center_center, @min(grid.top_right, grid.bottom_left), @max(grid.top_right, grid.bottom_left));
                     const result4 = math.clamp(grid.center_center, @min(grid.center_left, grid.center_right), @max(grid.center_left, grid.center_right));
 
-                    const d3_result = @select(T, mindiff == d3, result3, result1);
-                    const d2_result = @select(T, mindiff == d2, result2, d3_result);
-                    break :blk @select(T, mindiff == d4, result4, d2_result);
+                    const d3_result = @select(ComputeT, mindiff == d3, result3, result1);
+                    const d2_result = @select(ComputeT, mindiff == d2, result2, d3_result);
+                    break :blk @select(ComputeT, mindiff == d4, result4, d2_result);
                 },
                 19 => blk: {
                     const eight: UATV = @splat(8);
@@ -956,7 +957,7 @@ fn RemoveGrain(comptime T: type) type {
                     const sum = @as(UATV, grid.top_left) + @as(UATV, grid.top_center) + @as(UATV, grid.top_right) +
                         @as(UATV, grid.center_left) + @as(UATV, grid.center_right) +
                         @as(UATV, grid.bottom_left) + @as(UATV, grid.bottom_center) + @as(UATV, grid.bottom_right);
-                    break :blk if (types.isFloat(T))
+                    break :blk if (types.isFloat(ComputeT))
                         sum / eight
                     else
                         math.lossyCast(V, (sum + four) / eight);
@@ -967,7 +968,7 @@ fn RemoveGrain(comptime T: type) type {
                     const sum = @as(UATV, grid.top_left) + @as(UATV, grid.top_center) + @as(UATV, grid.top_right) +
                         @as(UATV, grid.center_left) + @as(UATV, grid.center_center) + @as(UATV, grid.center_right) +
                         @as(UATV, grid.bottom_left) + @as(UATV, grid.bottom_center) + @as(UATV, grid.bottom_right);
-                    break :blk if (types.isFloat(T))
+                    break :blk if (types.isFloat(ComputeT))
                         sum / nine
                     else
                         math.lossyCast(V, (sum + four) / nine);
@@ -979,10 +980,10 @@ fn RemoveGrain(comptime T: type) type {
                     const l2l = (@as(UATV, grid.top_center) + @as(UATV, grid.bottom_center)) / two;
                     const l3l = (@as(UATV, grid.top_right) + @as(UATV, grid.bottom_left)) / two;
                     const l4l = (@as(UATV, grid.center_left) + @as(UATV, grid.center_right)) / two;
-                    const l1h = if (types.isInt(T)) (@as(UATV, grid.top_left) + @as(UATV, grid.bottom_right) + one) / two else l1l;
-                    const l2h = if (types.isInt(T)) (@as(UATV, grid.top_center) + @as(UATV, grid.bottom_center) + one) / two else l2l;
-                    const l3h = if (types.isInt(T)) (@as(UATV, grid.top_right) + @as(UATV, grid.bottom_left) + one) / two else l3l;
-                    const l4h = if (types.isInt(T)) (@as(UATV, grid.center_left) + @as(UATV, grid.center_right) + one) / two else l4l;
+                    const l1h = if (types.isInt(ComputeT)) (@as(UATV, grid.top_left) + @as(UATV, grid.bottom_right) + one) / two else l1l;
+                    const l2h = if (types.isInt(ComputeT)) (@as(UATV, grid.top_center) + @as(UATV, grid.bottom_center) + one) / two else l2l;
+                    const l3h = if (types.isInt(ComputeT)) (@as(UATV, grid.top_right) + @as(UATV, grid.bottom_left) + one) / two else l3l;
+                    const l4h = if (types.isInt(ComputeT)) (@as(UATV, grid.center_left) + @as(UATV, grid.center_right) + one) / two else l4l;
                     const minimum = if (mode == 22) @min(l1h, l2h, l3h, l4h) else @min(l1l, l2l, l3l, l4l);
                     const maximum = @max(l1h, l2h, l3h, l4h);
                     const minimum_t = math.lossyCast(V, minimum);
@@ -1045,21 +1046,21 @@ fn RemoveGrain(comptime T: type) type {
                     const divisor: UATV = @splat(2);
                     const rounding: UATV = @splat(1);
 
-                    const average1 = if (types.isFloat(T))
+                    const average1 = if (types.isFloat(ComputeT))
                         (@as(UATV, grid.top_left) + @as(UATV, grid.bottom_right)) / divisor
                     else
                         math.lossyCast(V, (@as(UATV, grid.top_left) + @as(UATV, grid.bottom_right) + rounding) / divisor);
-                    const average2 = if (types.isFloat(T))
+                    const average2 = if (types.isFloat(ComputeT))
                         (@as(UATV, grid.top_center) + @as(UATV, grid.bottom_center)) / divisor
                     else
                         math.lossyCast(V, (@as(UATV, grid.top_center) + @as(UATV, grid.bottom_center) + rounding) / divisor);
-                    const average3 = if (types.isFloat(T))
+                    const average3 = if (types.isFloat(ComputeT))
                         (@as(UATV, grid.top_right) + @as(UATV, grid.bottom_left)) / divisor
                     else
                         math.lossyCast(V, (@as(UATV, grid.top_right) + @as(UATV, grid.bottom_left) + rounding) / divisor);
 
-                    const d3_result = @select(T, mindiff == d3, average3, average1);
-                    break :blk @select(T, mindiff == d2, average2, d3_result);
+                    const d3_result = @select(ComputeT, mindiff == d3, average3, average1);
+                    break :blk @select(ComputeT, mindiff == d2, average2, d3_result);
                 },
                 15, 16 => blk: {
                     const d1 = @abs(@as(SATV, grid.top_left) - @as(SATV, grid.bottom_right));
@@ -1072,7 +1073,7 @@ fn RemoveGrain(comptime T: type) type {
                     const weighted_sum = pair_weight * (@as(UATV, grid.top_center) + @as(UATV, grid.bottom_center)) +
                         @as(UATV, grid.top_left) + @as(UATV, grid.top_right) +
                         @as(UATV, grid.bottom_left) + @as(UATV, grid.bottom_right);
-                    const average = if (types.isFloat(T))
+                    const average = if (types.isFloat(ComputeT))
                         math.lossyCast(V, weighted_sum / divisor)
                     else
                         math.lossyCast(V, (weighted_sum + rounding) / divisor);
@@ -1080,8 +1081,8 @@ fn RemoveGrain(comptime T: type) type {
                     const result1 = math.clamp(average, @min(grid.top_left, grid.bottom_right), @max(grid.top_left, grid.bottom_right));
                     const result2 = math.clamp(average, @min(grid.top_center, grid.bottom_center), @max(grid.top_center, grid.bottom_center));
                     const result3 = math.clamp(average, @min(grid.top_right, grid.bottom_left), @max(grid.top_right, grid.bottom_left));
-                    const d3_result = @select(T, mindiff == d3, result3, result1);
-                    break :blk @select(T, mindiff == d2, result2, d3_result);
+                    const d3_result = @select(ComputeT, mindiff == d3, result3, result1);
+                    break :blk @select(ComputeT, mindiff == d2, result2, d3_result);
                 },
                 17 => blk: {
                     const min1 = @min(grid.top_left, grid.bottom_right);
@@ -1110,8 +1111,14 @@ fn RemoveGrain(comptime T: type) type {
             var column: usize = 1;
             while (column + vector_len <= width - 1) : (column += vector_len) {
                 const top_left = ((row - 1) * stride) + column - 1;
-                const grid = gridcmn.Grid(V).init(T, srcp[top_left..], math.lossyCast(u32, stride));
-                vec.store(V, dstp, row_start + column, removegrainVector(mode, V, grid, chroma));
+                if (comptime T == f16 and @typeInfo(V).vector.child == f32) {
+                    const V16 = @Vector(vector_len, f16);
+                    const grid = gridcmn.initF16AsF32(V16, V, srcp[top_left..], stride);
+                    vec.storeF32AsF16(V16, dstp, row_start + column, removegrainVector(mode, V, grid, chroma));
+                } else {
+                    const grid = gridcmn.Grid(V).init(T, srcp[top_left..], math.lossyCast(u32, stride));
+                    vec.store(V, dstp, row_start + column, removegrainVector(mode, V, grid, chroma));
+                }
             }
             for (column..width - 1) |tail_column| {
                 const top_left = ((row - 1) * stride) + tail_column - 1;
@@ -1138,8 +1145,52 @@ fn RemoveGrain(comptime T: type) type {
                 dstp[(height - 1) * stride + column] = removegrain(mode, grid, chroma);
             }
         }
+        fn processPlaneVectorF16Widened(mode: comptime_int, noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize, chroma: bool) void {
+            const V = @Vector(vec.getVecSize(f32), f32);
+
+            for (0..width) |column| {
+                const grid = Grid.initFromCenterMirrored(T, 0, column, width, height, srcp, stride);
+                dstp[column] = removegrain(mode, grid, chroma);
+            }
+
+            for (1..height - 1) |row| processVectorRow(mode, V, srcp, dstp, row, width, height, stride, chroma);
+
+            for (0..width) |column| {
+                const grid = Grid.initFromCenterMirrored(T, height - 1, column, width, height, srcp, stride);
+                dstp[(height - 1) * stride + column] = removegrain(mode, grid, chroma);
+            }
+        }
         fn processPlaneVectorInterlaced(mode: comptime_int, noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize, chroma: bool) void {
             const V = @Vector(vec.getVecSize(T), T);
+
+            for (0..width) |column| {
+                const grid = Grid.initFromCenterMirrored(T, 0, column, width, height, srcp, stride);
+                dstp[column] = removegrain(mode, grid, chroma);
+            }
+
+            if (comptime mode == 13 or mode == 15) {
+                for (1..height - 1) |row| {
+                    if ((row & 1) != 0) @memcpy(dstp[row * stride ..][0..width], srcp[row * stride ..][0..width]);
+                }
+                var row: usize = 2;
+                while (row < height - 1) : (row += 2) processVectorRow(mode, V, srcp, dstp, row, width, height, stride, chroma);
+            } else if (comptime mode == 14 or mode == 16) {
+                for (1..height - 1) |row| {
+                    if ((row & 1) == 0) @memcpy(dstp[row * stride ..][0..width], srcp[row * stride ..][0..width]);
+                }
+                var row: usize = 1;
+                while (row < height - 1) : (row += 2) processVectorRow(mode, V, srcp, dstp, row, width, height, stride, chroma);
+            } else {
+                unreachable;
+            }
+
+            for (0..width) |column| {
+                const grid = Grid.initFromCenterMirrored(T, height - 1, column, width, height, srcp, stride);
+                dstp[(height - 1) * stride + column] = removegrain(mode, grid, chroma);
+            }
+        }
+        fn processPlaneVectorInterlacedF16Widened(mode: comptime_int, noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize, chroma: bool) void {
+            const V = @Vector(vec.getVecSize(f32), f32);
 
             for (0..width) |column| {
                 const grid = Grid.initFromCenterMirrored(T, 0, column, width, height, srcp, stride);
@@ -1232,6 +1283,13 @@ fn RemoveGrain(comptime T: type) type {
                                 const row_start = row * stride;
                                 try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
                             }
+                            @memset(simd, 0);
+                            processPlaneVectorF16Widened(mode, srcp, simd, width, height, stride, chroma);
+                            for (0..height) |row| {
+                                const row_start = row * stride;
+                                try expectF16SlicesWithinOneUlp(scalar[row_start..][0..width], simd[row_start..][0..width]);
+                            }
+
                         }
 
                         inline for ([_]comptime_int{ 13, 14, 15, 16 }) |mode| {
@@ -1242,6 +1300,12 @@ fn RemoveGrain(comptime T: type) type {
                             for (0..height) |row| {
                                 const row_start = row * stride;
                                 try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                            }
+                            @memset(simd, 0);
+                            processPlaneVectorInterlacedF16Widened(mode, srcp, simd, width, height, stride, chroma);
+                            for (0..height) |row| {
+                                const row_start = row * stride;
+                                try expectF16SlicesWithinOneUlp(scalar[row_start..][0..width], simd[row_start..][0..width]);
                             }
                         }
                     }
@@ -1301,6 +1365,19 @@ fn RemoveGrain(comptime T: type) type {
                 .bottom_center = grid.bottom_center[lane],
                 .bottom_right = grid.bottom_right[lane],
             };
+        }
+
+        fn expectF16SlicesWithinOneUlp(expected: []const f16, actual: []const f16) !void {
+            try testing.expectEqual(expected.len, actual.len);
+            for (expected, actual) |expected_pixel, actual_pixel| {
+                const expected_bits: u16 = @bitCast(expected_pixel);
+                const actual_bits: u16 = @bitCast(actual_pixel);
+                const ulp_difference = if (expected_bits > actual_bits)
+                    expected_bits - actual_bits
+                else
+                    actual_bits - expected_bits;
+                try testing.expect(ulp_difference <= 1);
+            }
         }
 
         test "SIMD vector candidates preserve RGVS tie order" {
@@ -1389,18 +1466,19 @@ fn RemoveGrain(comptime T: type) type {
             try testing.expectEqual(@as(V, @splat(3)), removegrainVector(16, V, interpolation_grid, false));
         }
 
-        fn useNativeF16Vector(comptime mode: u5) bool {
-            if (comptime T != f16) return true;
+        fn f16VectorPath(comptime mode: u5) enum { scalar, native, widened } {
+            if (comptime T != f16) return .native;
 
             // Keep auto compatible with the existing curated modes. The other
             // cases are explicit measurement variants, not target policy.
             return switch (@import("config").f16_simd) {
                 .auto => switch (mode) {
-                    1...4, 13...17, 20, 22 => true,
-                    else => false,
+                    1...4, 13...17, 20, 22 => .native,
+                    else => .scalar,
                 },
-                .scalar => false,
-                .native => true,
+                .scalar => .scalar,
+                .native => .native,
+                .widened => .widened,
             };
         }
 
@@ -1411,18 +1489,21 @@ fn RemoveGrain(comptime T: type) type {
 
             // See note above about the use of "double switch" optimization.
             switch (mode) {
-                inline 1...12 => |m| if (comptime useNativeF16Vector(m))
-                    processPlaneVector(m, srcp, dstp, width, height, stride, chroma)
-                else
-                    processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
-                inline 13...16 => |m| if (comptime useNativeF16Vector(m))
-                    processPlaneVectorInterlaced(m, srcp, dstp, width, height, stride, chroma)
-                else
-                    processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
-                inline 17...24 => |m| if (comptime useNativeF16Vector(m))
-                    processPlaneVector(m, srcp, dstp, width, height, stride, chroma)
-                else
-                    processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
+                inline 1...12 => |m| switch (comptime f16VectorPath(m)) {
+                    .scalar => processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
+                    .native => processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
+                    .widened => processPlaneVectorF16Widened(m, srcp, dstp, width, height, stride, chroma),
+                },
+                inline 13...16 => |m| switch (comptime f16VectorPath(m)) {
+                    .scalar => processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
+                    .native => processPlaneVectorInterlaced(m, srcp, dstp, width, height, stride, chroma),
+                    .widened => processPlaneVectorInterlacedF16Widened(m, srcp, dstp, width, height, stride, chroma),
+                },
+                inline 17...24 => |m| switch (comptime f16VectorPath(m)) {
+                    .scalar => processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
+                    .native => processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
+                    .widened => processPlaneVectorF16Widened(m, srcp, dstp, width, height, stride, chroma),
+                },
                 else => unreachable,
             }
         }

@@ -43,7 +43,7 @@ For same-source configuration experiments, repeat
 `--baseline-build-option` or `--candidate-build-option`. The comparator permits
 the two roles to resolve to the same commit only when their ordered build-option
 lists differ, and records both lists in its JSON, Markdown, and metadata
-configuration. For example, compare the curated F16 dispatch with all
+configuration. For example, compare the scalar F16 baseline with all
 native-F16 vector modes using direct-frame latency evidence:
 
 ```sh
@@ -56,7 +56,21 @@ bun benchmarks/compare_revisions.ts \
   --iterations 7 --warmup 1
 ```
 
-This is a measurement experiment, not a target policy decision; use `--full`
+RemoveGrain also has a `widened` experiment that loads F16 storage, evaluates
+the vector interior in F32, and narrows at the store boundary. It keeps scalar
+borders and tails and permits at most one F16 ULP from scalar storage results;
+Repair remains scalar in this variant until it has an equivalent F32 kernel.
+
+```sh
+bun benchmarks/compare_revisions.ts \
+  --baseline HEAD --candidate HEAD \
+  --baseline-build-option=-Df16-simd=native \
+  --candidate-build-option=-Df16-simd=widened \
+  --filter RemoveGrain --plugin zsmooth --format f16 \
+  --iterations 7 --warmup 1
+```
+
+These are measurement experiments, not target policy decisions; use `--full`
 when full-stream throughput is the relevant metric.
 
 
