@@ -8,6 +8,7 @@ const math = @import("common/math.zig");
 const vscmn = @import("common/vapoursynth.zig");
 const sort = @import("common/sorting_networks.zig");
 const gridcmn = @import("common/grid.zig");
+const vec = @import("common/vector.zig");
 const float_mode: std.builtin.FloatMode = if (@import("config").optimize_float) .optimized else .strict;
 
 const vs = vapoursynth.vapoursynth4;
@@ -720,6 +721,22 @@ fn RemoveGrain(comptime T: type) type {
             };
         }
 
+        fn processScalarRow(mode: comptime_int, noalias srcp: []const T, noalias dstp: []T, row: usize, width: usize, height: usize, stride: usize, chroma: bool) void {
+            const row_start = row * stride;
+
+            const grid_first = Grid.initFromCenterMirrored(T, row, 0, width, height, srcp, stride);
+            dstp[row_start] = removegrain(mode, grid_first, chroma);
+
+            for (1..width - 1) |column| {
+                const top_left = ((row - 1) * stride) + column - 1;
+                const grid = Grid.init(T, srcp[top_left..], math.lossyCast(u32, stride));
+                dstp[row_start + column] = removegrain(mode, grid, chroma);
+            }
+
+            const grid_last = Grid.initFromCenterMirrored(T, row, width - 1, width, height, srcp, stride);
+            dstp[row_start + width - 1] = removegrain(mode, grid_last, chroma);
+        }
+
         pub fn processPlaneScalar(mode: comptime_int, noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize, chroma: bool) void {
             // Process top row with mirrored grid.
             for (0..width) |column| {
@@ -727,39 +744,20 @@ fn RemoveGrain(comptime T: type) type {
                 dstp[(0 * stride) + column] = removegrain(mode, grid, chroma);
             }
 
-            // TODO: Unify naming around row/column/w/x/y, etc for all filters...
-            for (1..height - 1) |row| {
-                // Handle interlacing (top field/bottom field) modes
-                //
-                // TODO: Skipping lines like this trashes performance, so modes 13, 14, 15, and 16 performance pretty poorly.
-                // By comparison, RGVS is about 3-4x faster than this version, and its essentially doing the same thing.
-                //
-                // Example numbers on my 9950x: RGVS = ~500+fps, Zsmooth = ~120fps.
-                //
-                // So there's the potential for optimization here, even if it simply means upgrading to newer versions of Zig
-                // that compile this into better code...
-                if (shouldSkipLine(mode, row)) {
-                    const currentLine = (row * stride);
-                    @memcpy(dstp[currentLine..], srcp[currentLine..(currentLine + width)]);
-                    continue;
+            if (comptime mode == 13 or mode == 15) {
+                for (1..height - 1) |row| {
+                    if ((row & 1) != 0) @memcpy(dstp[row * stride ..][0..width], srcp[row * stride ..][0..width]);
                 }
-
-                // Process first pixel of the row with mirrored grid.
-                const gridFirst = Grid.initFromCenterMirrored(T, row, 0, width, height, srcp, stride);
-                dstp[(row * stride)] = removegrain(mode, gridFirst, chroma);
-
-                for (1..width - 1) |w| {
-                    const rowCurr = ((row) * stride);
-                    const top_left = ((row - 1) * stride) + w - 1;
-
-                    const grid = Grid.init(T, srcp[top_left..], math.lossyCast(u32, stride));
-
-                    dstp[rowCurr + w] = removegrain(mode, grid, chroma);
+                var row: usize = 2;
+                while (row < height - 1) : (row += 2) processScalarRow(mode, srcp, dstp, row, width, height, stride, chroma);
+            } else if (comptime mode == 14 or mode == 16) {
+                for (1..height - 1) |row| {
+                    if ((row & 1) == 0) @memcpy(dstp[row * stride ..][0..width], srcp[row * stride ..][0..width]);
                 }
-
-                // Process last pixel of the row with mirrored grid.
-                const gridLast = Grid.initFromCenterMirrored(T, row, width - 1, width, height, srcp, stride);
-                dstp[(row * stride) + (width - 1)] = removegrain(mode, gridLast, chroma);
+                var row: usize = 1;
+                while (row < height - 1) : (row += 2) processScalarRow(mode, srcp, dstp, row, width, height, stride, chroma);
+            } else {
+                for (1..height - 1) |row| processScalarRow(mode, srcp, dstp, row, width, height, stride, chroma);
             }
 
             // Process bottom row with mirrored grid.
@@ -780,6 +778,72 @@ fn RemoveGrain(comptime T: type) type {
                 return (line & 1) == 0;
             }
             return false;
+        }
+
+        fn removegrainVector(mode: comptime_int, comptime V: type, grid: gridcmn.Grid(V)) V {
+            return switch (mode) {
+                1 => @max(grid.minWithoutCenter(), @min(grid.center_center, grid.maxWithoutCenter())),
+                2, 3, 4 => blk: {
+                    var neighbours = grid.toArrayWithoutCenter();
+                    sort.sort(V, &neighbours);
+                    const lower = if (mode == 2) 1 else if (mode == 3) 2 else 3;
+                    const upper = 7 - lower;
+                    break :blk std.math.clamp(grid.center_center, neighbours[lower], neighbours[upper]);
+                },
+                17 => blk: {
+                    const min1 = @min(grid.top_left, grid.bottom_right);
+                    const max1 = @max(grid.top_left, grid.bottom_right);
+                    const min2 = @min(grid.top_center, grid.bottom_center);
+                    const max2 = @max(grid.top_center, grid.bottom_center);
+                    const min3 = @min(grid.top_right, grid.bottom_left);
+                    const max3 = @max(grid.top_right, grid.bottom_left);
+                    const min4 = @min(grid.center_left, grid.center_right);
+                    const max4 = @max(grid.center_left, grid.center_right);
+                    const lower = @max(min1, min2, min3, min4);
+                    const upper = @min(max1, max2, max3, max4);
+                    break :blk std.math.clamp(grid.center_center, @min(lower, upper), @max(lower, upper));
+                },
+                else => unreachable,
+            };
+        }
+
+        fn processVectorRow(mode: comptime_int, comptime V: type, noalias srcp: []const T, noalias dstp: []T, row: usize, width: usize, height: usize, stride: usize, chroma: bool) void {
+            const vector_len = @typeInfo(V).vector.len;
+            const row_start = row * stride;
+
+            const grid_first = Grid.initFromCenterMirrored(T, row, 0, width, height, srcp, stride);
+            dstp[row_start] = removegrain(mode, grid_first, chroma);
+
+            var column: usize = 1;
+            while (column + vector_len <= width - 1) : (column += vector_len) {
+                const top_left = ((row - 1) * stride) + column - 1;
+                const grid = gridcmn.Grid(V).init(T, srcp[top_left..], math.lossyCast(u32, stride));
+                vec.store(V, dstp, row_start + column, removegrainVector(mode, V, grid));
+            }
+            for (column..width - 1) |tail_column| {
+                const top_left = ((row - 1) * stride) + tail_column - 1;
+                const grid = Grid.init(T, srcp[top_left..], math.lossyCast(u32, stride));
+                dstp[row_start + tail_column] = removegrain(mode, grid, chroma);
+            }
+
+            const grid_last = Grid.initFromCenterMirrored(T, row, width - 1, width, height, srcp, stride);
+            dstp[row_start + width - 1] = removegrain(mode, grid_last, chroma);
+        }
+
+        fn processPlaneVector(mode: comptime_int, noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize, chroma: bool) void {
+            const V = @Vector(vec.getVecSize(T), T);
+
+            for (0..width) |column| {
+                const grid = Grid.initFromCenterMirrored(T, 0, column, width, height, srcp, stride);
+                dstp[column] = removegrain(mode, grid, chroma);
+            }
+
+            for (1..height - 1) |row| processVectorRow(mode, V, srcp, dstp, row, width, height, stride, chroma);
+
+            for (0..width) |column| {
+                const grid = Grid.initFromCenterMirrored(T, height - 1, column, width, height, srcp, stride);
+                dstp[(height - 1) * stride + column] = removegrain(mode, grid, chroma);
+            }
         }
 
         test shouldSkipLine {
@@ -806,28 +870,50 @@ fn RemoveGrain(comptime T: type) type {
             }
         }
 
+        test "SIMD modes match scalar reference" {
+            if (comptime T == f16) return;
+
+            const width = vec.getVecSize(T) + 3;
+            const height = 5;
+            const stride = width + 2;
+            const size = height * stride;
+            const srcp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(srcp);
+            const scalar = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(scalar);
+            const simd = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(simd);
+
+            for (srcp, 0..) |*pixel, i| {
+                switch (comptime types.numberType(T)) {
+                    .int => pixel.* = @intCast((i * 37) % 251),
+                    .float => pixel.* = @floatFromInt((i * 37) % 251),
+                }
+            }
+
+            inline for ([_]comptime_int{ 1, 2, 3, 4, 17 }) |mode| {
+                @memset(scalar, 0);
+                @memset(simd, 0);
+                processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
+                processPlaneVector(mode, srcp, simd, width, height, stride, false);
+                for (0..height) |row| {
+                    const row_start = row * stride;
+                    try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                }
+            }
+        }
+
         fn processPlane(mode: u5, noalias srcp8: []const u8, noalias dstp8: []u8, width: usize, height: usize, stride8: usize, chroma: bool) void {
             const stride = stride8 / @sizeOf(T);
             const srcp: []const T = @ptrCast(@alignCast(srcp8));
             const dstp: []T = @ptrCast(@alignCast(dstp8));
 
-            // While these double switches may seem excessive at first glance, it's actually a substantial performance
-            // optimization. By having this switch operate at run time, process_plane_scalar can be
-            // optimized *at compile time* for *each* mode. This allows it to autovectorize each
-            // remove grain function for maximum performance.
-            //
-            // If I change the code to use function pointers, passing in the remove grain function into
-            // process_plane_scalar, FPS drops from 750+ to 48. Again, this is because the compiler can't
-            // properly optimize each RG function and its use in process_plane_scalar.
-            //
-            // Function pointers would likely work if I implemented a full @Vector support, but
-            // when the compiler can produce such performance code using my *scalar* implementation,
-            // there's literally no point for such an explosion in code.
-            //
-            // These double switches (see the other in process_plane_scalar, which operates at comptime)
-            // are a bit gratuitous but they are *FAST*.
             switch (mode) {
-                inline 1...24 => |m| processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
+                inline 1...4, 17 => |m| if (comptime T == f16)
+                    processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
+                else
+                    processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
+                inline 5...16, 18...24 => |m| processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
                 else => unreachable,
             }
         }

@@ -15,10 +15,31 @@ pub fn loadAt(comptime VT: type, src: []const @typeInfo(VT).vector.child, row: u
 
 /// Stores vector data into memory at a given offset.
 pub fn store(comptime VT: type, _dst: []@typeInfo(VT).vector.child, offset: usize, result: VT) void {
-    var dst: []@typeInfo(VT).vector.child = @ptrCast(@alignCast(_dst));
-    inline for (dst[offset..][0..@typeInfo(VT).vector.len], 0..) |*d, i| {
-        d.* = result[i];
-    }
+    _dst[offset..][0..@typeInfo(VT).vector.len].* = result;
+}
+
+/// Loads a half-precision vector and widens it exactly once for kernels whose
+/// target lacks efficient native FP16 arithmetic.
+pub fn loadF16AsF32(comptime VT16: type, comptime VT32: type, src: []const f16, offset: usize) VT32 {
+    return @floatCast(load(VT16, src, offset));
+}
+
+/// Narrows a vector after an FP32 compute kernel has completed.
+pub fn storeF32AsF16(comptime VT16: type, dst: []f16, offset: usize, result: anytype) void {
+    store(VT16, dst, offset, @floatCast(result));
+}
+
+test "FP16 widening helpers" {
+    const V16 = @Vector(4, f16);
+    const V32 = @Vector(4, f32);
+    const input = [_]f16{ 0.25, 0.5, 0.75, 1.0 };
+    var output = [_]f16{ 0, 0, 0, 0 };
+
+    const widened: V32 = loadF16AsF32(V16, V32, &input, 0);
+    try std.testing.expectEqual(@as(V32, .{ 0.25, 0.5, 0.75, 1.0 }), widened);
+
+    storeF32AsF16(V16, &output, 0, widened * @as(V32, @splat(2)));
+    try std.testing.expectEqualDeep(&[_]f16{ 0.5, 1.0, 1.5, 2.0 }, &output);
 }
 
 /// Stores a vector of type VT into dst starting at the given row and column.

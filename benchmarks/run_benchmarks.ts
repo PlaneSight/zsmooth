@@ -16,6 +16,14 @@ const { values: cliArgs } = parseArgs({
       type: "string",
       default: "1.0"
     },
+    iterations: {
+      type: "string",
+      default: "7",
+    },
+    warmup: {
+      type: "string",
+      default: "1",
+    },
     plugin: {
       type: "string",
       multiple: true,
@@ -28,7 +36,16 @@ const { values: cliArgs } = parseArgs({
 })
 
 const DEFAULT_NUM_FRAMES = Math.round(2000 * Number.parseFloat(cliArgs['frame-count-scale']))
-const ITERATIONS = 3
+const ITERATIONS = Number.parseInt(cliArgs.iterations, 10)
+const WARMUP_ITERATIONS = Number.parseInt(cliArgs.warmup, 10)
+
+if (!Number.isSafeInteger(ITERATIONS) || ITERATIONS < 3) {
+  throw new Error('--iterations must be an integer of at least 3')
+}
+
+if (!Number.isSafeInteger(WARMUP_ITERATIONS) || WARMUP_ITERATIONS < 0) {
+  throw new Error('--warmup must be a non-negative integer')
+}
 
 type Benchmarks = {
   filter: string
@@ -420,6 +437,17 @@ const BENCHMARKS: Benchmarks[] = [
   },
 ]
 
+// FP16 support is a first-class performance target. Keep the matrix in sync
+// with every zsmooth FP32 case without duplicating hundreds of declarations.
+// Comparison plugins are deliberately excluded: support is inconsistent and
+// would make a missing third-party capability abort the entire suite.
+for (const benchmark of BENCHMARKS) {
+  const f16Specs = benchmark.specs
+    .filter((spec) => spec.plugin === 'zsmooth' && spec.format === 'f32')
+    .map((spec) => ({ ...spec, format: 'f16' as const }))
+  benchmark.specs.push(...f16Specs)
+}
+
 const benchmarksToRun = BENCHMARKS.filter((bench) => !cliArgs.filter || cliArgs.filter?.includes(bench.filter))
 
 console.log(`Benchmarking ${benchmarksToRun.length} filters`)
@@ -435,6 +463,22 @@ for (const filter of benchmarksToRun) {
     const fpsValues: number[] = []
     const args = [`output=${spec.plugin}`, `format=${spec.format}`].concat(spec.args)
     const vspipeArgs = args.flatMap((arg) => ['-a', arg])
+
+    for (let i = 0; i < WARMUP_ITERATIONS; i++) {
+      Bun.spawnSync(
+        [
+          'vspipe',
+          ...vspipeArgs,
+          '-e',
+          Math.round(spec.frames).toString(),
+          '-r',
+          '1',
+          filter.benchmarkPath,
+          '--',
+        ],
+        { stderr: 'pipe' },
+      )
+    }
 
     for (let i = 0; i < ITERATIONS; i++) {
       const { stderr } = Bun.spawnSync(

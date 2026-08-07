@@ -8,6 +8,7 @@ const copy = @import("common/copy.zig");
 const types = @import("common/type.zig");
 const vscmn = @import("common/vapoursynth.zig");
 const sort = @import("common/sorting_networks.zig");
+const vec = @import("common/vector.zig");
 const float_mode: std.builtin.FloatMode = if (@import("config").optimize_float) .optimized else .strict;
 
 const vs = vapoursynth.vapoursynth4;
@@ -38,7 +39,7 @@ fn VerticalCleaner(comptime T: type) type {
         const SAT = types.SignedArithmeticType(T);
         const UAT = types.UnsignedArithmeticType(T);
 
-        fn verticalMedian(noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize) void {
+        fn verticalMedianScalar(noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize) void {
             @setFloatMode(float_mode);
 
             // Copy the first line
@@ -58,34 +59,71 @@ fn VerticalCleaner(comptime T: type) type {
             copy.copyLastNLines(T, dstp, srcp, width, height, stride, 1);
         }
 
+        fn verticalMedian(noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize) void {
+            @setFloatMode(float_mode);
+            copy.copyFirstNLines(T, dstp, srcp, width, stride, 1);
+
+            if (comptime T == f16) {
+                verticalMedianF16(srcp, dstp, width, height, stride);
+            } else {
+                const V = @Vector(vec.getVecSize(T), T);
+                const vector_len = @typeInfo(V).vector.len;
+                for (1..height - 1) |row| {
+                    const row_start = row * stride;
+                    var column: usize = 0;
+                    while (column + vector_len <= width) : (column += vector_len) {
+                        const top = vec.load(V, srcp, row_start - stride + column);
+                        const center = vec.load(V, srcp, row_start + column);
+                        const bottom = vec.load(V, srcp, row_start + stride + column);
+                        vec.store(V, dstp, row_start + column, sort.median3(top, center, bottom));
+                    }
+                    for (column..width) |tail_column| {
+                        const offset = row_start + tail_column;
+                        dstp[offset] = sort.median3(srcp[offset - stride], srcp[offset], srcp[offset + stride]);
+                    }
+                }
+            }
+
+            copy.copyLastNLines(T, dstp, srcp, width, height, stride, 1);
+        }
+
+        fn verticalMedianF16(noalias srcp: []const f16, noalias dstp: []f16, width: usize, height: usize, stride: usize) void {
+            const V16 = @Vector(vec.getVecSize(f32), f16);
+            const V32 = @Vector(@typeInfo(V16).vector.len, f32);
+            const vector_len = @typeInfo(V16).vector.len;
+
+            for (1..height - 1) |row| {
+                const row_start = row * stride;
+                var column: usize = 0;
+                while (column + vector_len <= width) : (column += vector_len) {
+                    const top: V32 = vec.loadF16AsF32(V16, V32, srcp, row_start - stride + column);
+                    const center: V32 = vec.loadF16AsF32(V16, V32, srcp, row_start + column);
+                    const bottom: V32 = vec.loadF16AsF32(V16, V32, srcp, row_start + stride + column);
+                    vec.storeF32AsF16(V16, dstp, row_start + column, sort.median3(top, center, bottom));
+                }
+                for (column..width) |tail_column| {
+                    const offset = row_start + tail_column;
+                    dstp[offset] = sort.median3(srcp[offset - stride], srcp[offset], srcp[offset + stride]);
+                }
+            }
+        }
+
         test verticalMedian {
-            const width = 3;
+            const width = vec.getVecSize(T) + 3;
             const height = 5;
-            const stride = 3;
-            const srcp = [_]T{
-                0, 0, 0, //
-                3, 3, 3, //
-                1, 1, 1, //
-                5, 5, 5, //
-                0, 0, 0, //
-            };
+            const stride = width;
+            const srcp = [_]T{0} ** width ++ [_]T{3} ** width ++ [_]T{1} ** width ++ [_]T{5} ** width ++ [_]T{0} ** width;
 
             const dstp = try testingAllocator.alloc(T, height * stride);
             defer testingAllocator.free(dstp);
 
             verticalMedian(&srcp, dstp, width, height, stride);
 
-            const expected = [_]T{
-                0, 0, 0, //
-                1, 1, 1, //
-                3, 3, 3, //
-                1, 1, 1, //
-                0, 0, 0, //
-            };
+            const expected = [_]T{0} ** width ++ [_]T{1} ** width ++ [_]T{3} ** width ++ [_]T{1} ** width ++ [_]T{0} ** width;
             try std.testing.expectEqualDeep(&expected, dstp);
         }
 
-        fn relaxedVerticalMedian(noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize, minimum: T, maximum: T) void {
+        fn relaxedVerticalMedianScalar(noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize, minimum: T, maximum: T) void {
             @setFloatMode(float_mode);
 
             // Copy the first two lines
@@ -119,30 +157,109 @@ fn VerticalCleaner(comptime T: type) type {
             copy.copyLastNLines(T, dstp, srcp, width, height, stride, 2);
         }
 
+        fn relaxedVerticalMedian(noalias srcp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize, minimum: T, maximum: T) void {
+            @setFloatMode(float_mode);
+            copy.copyFirstNLines(T, dstp, srcp, width, stride, 2);
+
+            if (comptime T == f16) {
+                relaxedVerticalMedianF16(srcp, dstp, width, height, stride, minimum, maximum);
+            } else {
+                const V = @Vector(vec.getVecSize(T), T);
+                const vector_len = @typeInfo(V).vector.len;
+                const vmin: V = @splat(minimum);
+                const vmax: V = @splat(maximum);
+
+                for (2..height - 2) |row| {
+                    const row_start = row * stride;
+                    var column: usize = 0;
+                    while (column + vector_len <= width) : (column += vector_len) {
+                        const p2 = vec.load(V, srcp, row_start - 2 * stride + column);
+                        const p1 = vec.load(V, srcp, row_start - stride + column);
+                        const c = vec.load(V, srcp, row_start + column);
+                        const n1 = vec.load(V, srcp, row_start + stride + column);
+                        const n2 = vec.load(V, srcp, row_start + 2 * stride + column);
+                        const upper = if (comptime types.isInt(T))
+                            @max(@max(@min(std.math.clamp(std.math.clamp(p1 -| p2, vmin, vmax) +| p1, vmin, vmax), std.math.clamp(std.math.clamp(n1 -| n2, vmin, vmax) +| n1, vmin, vmax)), p1), n1)
+                        else
+                            @max(@max(@min(std.math.clamp(std.math.clamp(p1 - p2, vmin, vmax) + p1, vmin, vmax), std.math.clamp(std.math.clamp(n1 - n2, vmin, vmax) + n1, vmin, vmax)), p1), n1);
+                        const lower = if (comptime types.isInt(T))
+                            @min(@min(p1, n1), @max(std.math.clamp(p1 -| std.math.clamp(p2 -| p1, vmin, vmax), vmin, vmax), std.math.clamp(n1 -| std.math.clamp(n2 -| n1, vmin, vmax), vmin, vmax)))
+                        else
+                            @min(@min(p1, n1), @max(std.math.clamp(p1 - std.math.clamp(p2 - p1, vmin, vmax), vmin, vmax), std.math.clamp(n1 - std.math.clamp(n2 - n1, vmin, vmax), vmin, vmax)));
+                        vec.store(V, dstp, row_start + column, std.math.clamp(c, lower, upper));
+                    }
+
+                    for (column..width) |tail_column| {
+                        const offset = row_start + tail_column;
+                        const p2 = srcp[offset - 2 * stride];
+                        const p1 = srcp[offset - stride];
+                        const c = srcp[offset];
+                        const n1 = srcp[offset + stride];
+                        const n2 = srcp[offset + 2 * stride];
+                        const upper = if (comptime types.isInt(T))
+                            @max(@max(@min(std.math.clamp(std.math.clamp(p1 -| p2, minimum, maximum) +| p1, minimum, maximum), std.math.clamp(std.math.clamp(n1 -| n2, minimum, maximum) +| n1, minimum, maximum)), p1), n1)
+                        else
+                            @max(@max(@min(std.math.clamp(std.math.clamp(p1 - p2, minimum, maximum) + p1, minimum, maximum), std.math.clamp(std.math.clamp(n1 - n2, minimum, maximum) + n1, minimum, maximum)), p1), n1);
+                        const lower = if (comptime types.isInt(T))
+                            @min(@min(p1, n1), @max(std.math.clamp(p1 -| std.math.clamp(p2 -| p1, minimum, maximum), minimum, maximum), std.math.clamp(n1 -| std.math.clamp(n2 -| n1, minimum, maximum), minimum, maximum)))
+                        else
+                            @min(@min(p1, n1), @max(std.math.clamp(p1 - std.math.clamp(p2 - p1, minimum, maximum), minimum, maximum), std.math.clamp(n1 - std.math.clamp(n2 - n1, minimum, maximum), minimum, maximum)));
+                        dstp[offset] = std.math.clamp(c, lower, upper);
+                    }
+                }
+            }
+
+            copy.copyLastNLines(T, dstp, srcp, width, height, stride, 2);
+        }
+
+        fn relaxedVerticalMedianF16(noalias srcp: []const f16, noalias dstp: []f16, width: usize, height: usize, stride: usize, minimum: f16, maximum: f16) void {
+            const V16 = @Vector(vec.getVecSize(f32), f16);
+            const V32 = @Vector(@typeInfo(V16).vector.len, f32);
+            const vector_len = @typeInfo(V16).vector.len;
+            const vmin: V32 = @splat(@as(f32, @floatCast(minimum)));
+            const vmax: V32 = @splat(@as(f32, @floatCast(maximum)));
+
+            for (2..height - 2) |row| {
+                const row_start = row * stride;
+                var column: usize = 0;
+                while (column + vector_len <= width) : (column += vector_len) {
+                    const p2: V32 = vec.loadF16AsF32(V16, V32, srcp, row_start - 2 * stride + column);
+                    const p1: V32 = vec.loadF16AsF32(V16, V32, srcp, row_start - stride + column);
+                    const c: V32 = vec.loadF16AsF32(V16, V32, srcp, row_start + column);
+                    const n1: V32 = vec.loadF16AsF32(V16, V32, srcp, row_start + stride + column);
+                    const n2: V32 = vec.loadF16AsF32(V16, V32, srcp, row_start + 2 * stride + column);
+                    const upper = @max(@max(@min(std.math.clamp(std.math.clamp(p1 - p2, vmin, vmax) + p1, vmin, vmax), std.math.clamp(std.math.clamp(n1 - n2, vmin, vmax) + n1, vmin, vmax)), p1), n1);
+                    const lower = @min(@min(p1, n1), @max(std.math.clamp(p1 - std.math.clamp(p2 - p1, vmin, vmax), vmin, vmax), std.math.clamp(n1 - std.math.clamp(n2 - n1, vmin, vmax), vmin, vmax)));
+                    vec.storeF32AsF16(V16, dstp, row_start + column, std.math.clamp(c, lower, upper));
+                }
+                for (column..width) |tail_column| {
+                    const offset = row_start + tail_column;
+                    const p2: f32 = @floatCast(srcp[offset - 2 * stride]);
+                    const p1: f32 = @floatCast(srcp[offset - stride]);
+                    const c: f32 = @floatCast(srcp[offset]);
+                    const n1: f32 = @floatCast(srcp[offset + stride]);
+                    const n2: f32 = @floatCast(srcp[offset + 2 * stride]);
+                    const min: f32 = @floatCast(minimum);
+                    const max: f32 = @floatCast(maximum);
+                    const upper = @max(@max(@min(std.math.clamp(std.math.clamp(p1 - p2, min, max) + p1, min, max), std.math.clamp(std.math.clamp(n1 - n2, min, max) + n1, min, max)), p1), n1);
+                    const lower = @min(@min(p1, n1), @max(std.math.clamp(p1 - std.math.clamp(p2 - p1, min, max), min, max), std.math.clamp(n1 - std.math.clamp(n2 - n1, min, max), min, max)));
+                    dstp[offset] = @floatCast(std.math.clamp(c, lower, upper));
+                }
+            }
+        }
+
         test relaxedVerticalMedian {
-            const width = 3;
+            const width = vec.getVecSize(T) + 3;
             const height = 5;
-            const stride = 3;
-            const srcp = [_]T{
-                0, 0, 0, //
-                3, 3, 3, //
-                1, 1, 1, //
-                5, 5, 5, //
-                0, 0, 0, //
-            };
+            const stride = width;
+            const srcp = [_]T{0} ** width ++ [_]T{3} ** width ++ [_]T{1} ** width ++ [_]T{5} ** width ++ [_]T{0} ** width;
 
             const dstp = try testingAllocator.alloc(T, height * stride);
             defer testingAllocator.free(dstp);
 
             relaxedVerticalMedian(&srcp, dstp, width, height, stride, 0, 255);
 
-            const expected = [_]T{
-                0, 0, 0, //
-                3, 3, 3, //
-                3, 3, 3, //
-                5, 5, 5, //
-                0, 0, 0, //
-            };
+            const expected = [_]T{0} ** width ++ [_]T{3} ** width ++ [_]T{3} ** width ++ [_]T{5} ** width ++ [_]T{0} ** width;
             try std.testing.expectEqualDeep(&expected, dstp);
         }
 

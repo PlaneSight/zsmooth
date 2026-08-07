@@ -76,6 +76,11 @@ test isScalar {
 }
 
 pub inline fn getTypeMaximum(comptime T: type, comptime chroma: bool) T {
+    if (comptime isVector(T)) {
+        const Elem = @typeInfo(T).vector.child;
+        return @splat(getTypeMaximum(Elem, chroma));
+    }
+
     return switch (T) {
         u8, u16 => |t| std.math.maxInt(t),
         f16, f32 => if (chroma) 0.5 else 1.0,
@@ -84,6 +89,11 @@ pub inline fn getTypeMaximum(comptime T: type, comptime chroma: bool) T {
 }
 
 pub inline fn getTypeMinimum(comptime T: type, comptime chroma: bool) T {
+    if (comptime isVector(T)) {
+        const Elem = @typeInfo(T).vector.child;
+        return @splat(getTypeMinimum(Elem, chroma));
+    }
+
     return switch (T) {
         u8, u16 => 0,
         f16, f32 => if (chroma) -0.5 else 0.0,
@@ -112,6 +122,16 @@ test "Type max / min" {
     try std.testing.expectEqual(-0.5, getTypeMinimum(f32, true));
 }
 
+test "vector type bounds" {
+    const U12 = @Vector(8, u16);
+    const F16 = @Vector(8, f16);
+
+    try std.testing.expectEqual(@as(U12, @splat(65535)), getTypeMaximum(U12, false));
+    try std.testing.expectEqual(@as(U12, @splat(0)), getTypeMinimum(U12, true));
+    try std.testing.expectEqual(@as(F16, @splat(0.5)), getTypeMaximum(F16, true));
+    try std.testing.expectEqual(@as(F16, @splat(-0.5)), getTypeMinimum(F16, true));
+}
+
 pub fn floatFromInt(comptime T: type, val: anytype) T {
     return @as(T, @floatFromInt(val));
 }
@@ -120,6 +140,12 @@ pub fn floatFromInt(comptime T: type, val: anytype) T {
 /// the full value of T (which is expected to be unsigned for integers)
 /// without overflowing in signed arithmetic.
 pub fn SignedArithmeticType(comptime T: type) type {
+    if (comptime isVector(T)) {
+        const vector_len = @typeInfo(T).vector.len;
+        const Elem = @typeInfo(T).vector.child;
+        return @Vector(vector_len, SignedArithmeticType(Elem));
+    }
+
     return switch (T) {
         u8 => i16,
         u16 => i32,
@@ -133,6 +159,12 @@ pub fn SignedArithmeticType(comptime T: type) type {
 /// operations where the original signed value may be multiplied muliple times
 /// over (and thus overflow on smaller types).
 pub fn BigSignedArithmeticType(comptime T: type) type {
+    if (comptime isVector(T)) {
+        const vector_len = @typeInfo(T).vector.len;
+        const Elem = @typeInfo(T).vector.child;
+        return @Vector(vector_len, BigSignedArithmeticType(Elem));
+    }
+
     return switch (T) {
         u8 => i32,
         u16 => i64,
@@ -167,6 +199,12 @@ pub fn UnsignedArithmeticType(comptime T: type) type {
 /// operations where the original unsigned value may be multiplied muliple times
 /// over (and thus overflow on smaller types).
 pub fn BigUnsignedArithmeticType(comptime T: type) type {
+    if (comptime isVector(T)) {
+        const vector_len = @typeInfo(T).vector.len;
+        const Elem = @typeInfo(T).vector.child;
+        return @Vector(vector_len, BigUnsignedArithmeticType(Elem));
+    }
+
     return switch (T) {
         u8 => u32,
         u16 => u64,
@@ -174,4 +212,11 @@ pub fn BigUnsignedArithmeticType(comptime T: type) type {
         f32 => f32,
         else => unreachable,
     };
+}
+
+test "vector arithmetic types" {
+    try std.testing.expect(SignedArithmeticType(@Vector(8, u8)) == @Vector(8, i16));
+    try std.testing.expect(BigSignedArithmeticType(@Vector(8, u16)) == @Vector(8, i64));
+    try std.testing.expect(UnsignedArithmeticType(@Vector(8, u8)) == @Vector(8, u16));
+    try std.testing.expect(BigUnsignedArithmeticType(@Vector(8, u16)) == @Vector(8, u64));
 }

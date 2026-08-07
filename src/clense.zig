@@ -9,6 +9,7 @@ const types = @import("common/type.zig");
 const vscmn = @import("common/vapoursynth.zig");
 const sort = @import("common/sorting_networks.zig");
 const math = @import("common/math.zig");
+const vec = @import("common/vector.zig");
 const float_mode: std.builtin.FloatMode = if (@import("config").optimize_float) .optimized else .strict;
 
 const vs = vapoursynth.vapoursynth4;
@@ -46,8 +47,8 @@ fn Clense(comptime T: type) type {
         const SAT = types.SignedArithmeticType(T);
         const UAT = types.UnsignedArithmeticType(T);
 
-        /// Find the median of the previous, current, and next frames.
-        fn clense(noalias dstp: []T, noalias srcp: []const T, noalias prev: []const T, noalias next: []const T, width: usize, height: usize, stride: usize) void {
+        /// Scalar reference used for tails and differential tests.
+        fn clenseScalar(noalias dstp: []T, noalias srcp: []const T, noalias prev: []const T, noalias next: []const T, width: usize, height: usize, stride: usize) void {
             @setFloatMode(float_mode);
 
             for (0..height) |row| {
@@ -61,8 +62,61 @@ fn Clense(comptime T: type) type {
             }
         }
 
+        /// Find the median of the previous, current, and next frames using
+        /// explicit vectors. This avoids relying on LLVM loop vectorisation.
+        fn clense(noalias dstp: []T, noalias srcp: []const T, noalias prev: []const T, noalias next: []const T, width: usize, height: usize, stride: usize) void {
+            @setFloatMode(float_mode);
+
+            if (comptime T == f16) {
+                return clenseF16(dstp, srcp, prev, next, width, height, stride);
+            }
+
+            const V = @Vector(vec.getVecSize(T), T);
+            const vector_len = @typeInfo(V).vector.len;
+
+            for (0..height) |row| {
+                const row_start = row * stride;
+                var column: usize = 0;
+                while (column + vector_len <= width) : (column += vector_len) {
+                    const offset = row_start + column;
+                    const p = vec.load(V, prev, offset);
+                    const c = vec.load(V, srcp, offset);
+                    const n = vec.load(V, next, offset);
+                    vec.store(V, dstp, offset, sort.median3(p, c, n));
+                }
+
+                for (column..width) |tail_column| {
+                    const offset = row_start + tail_column;
+                    dstp[offset] = sort.median3(prev[offset], srcp[offset], next[offset]);
+                }
+            }
+        }
+
+        fn clenseF16(noalias dstp: []f16, noalias srcp: []const f16, noalias prev: []const f16, noalias next: []const f16, width: usize, height: usize, stride: usize) void {
+            const V16 = @Vector(vec.getVecSize(f32), f16);
+            const V32 = @Vector(@typeInfo(V16).vector.len, f32);
+            const vector_len = @typeInfo(V16).vector.len;
+
+            for (0..height) |row| {
+                const row_start = row * stride;
+                var column: usize = 0;
+                while (column + vector_len <= width) : (column += vector_len) {
+                    const offset = row_start + column;
+                    const p: V32 = vec.loadF16AsF32(V16, V32, prev, offset);
+                    const c: V32 = vec.loadF16AsF32(V16, V32, srcp, offset);
+                    const n: V32 = vec.loadF16AsF32(V16, V32, next, offset);
+                    vec.storeF32AsF16(V16, dstp, offset, sort.median3(p, c, n));
+                }
+
+                for (column..width) |tail_column| {
+                    const offset = row_start + tail_column;
+                    dstp[offset] = sort.median3(prev[offset], srcp[offset], next[offset]);
+                }
+            }
+        }
+
         /// Clamps the source pixel using the difference between the furthest frame and the weighted minimum or maximum pixel of the closest and furthest frames.
-        fn clenseForwardBackward(noalias dstp: []T, noalias srcp: []const T, noalias ref1p: []const T, noalias ref2p: []const T, width: usize, height: usize, stride: usize) void {
+        fn clenseForwardBackwardScalar(noalias dstp: []T, noalias srcp: []const T, noalias ref1p: []const T, noalias ref2p: []const T, width: usize, height: usize, stride: usize) void {
             @setFloatMode(float_mode);
 
             for (0..height) |row| {
@@ -92,85 +146,110 @@ fn Clense(comptime T: type) type {
             }
         }
 
+        fn clenseForwardBackward(noalias dstp: []T, noalias srcp: []const T, noalias ref1p: []const T, noalias ref2p: []const T, width: usize, height: usize, stride: usize) void {
+            @setFloatMode(float_mode);
+
+            if (comptime T == f16) {
+                return clenseForwardBackwardF16(dstp, srcp, ref1p, ref2p, width, height, stride);
+            }
+
+            const V = @Vector(vec.getVecSize(T), T);
+            const vector_len = @typeInfo(V).vector.len;
+
+            for (0..height) |row| {
+                const row_start = row * stride;
+                var column: usize = 0;
+                while (column + vector_len <= width) : (column += vector_len) {
+                    const offset = row_start + column;
+                    const ref1 = vec.load(V, ref1p, offset);
+                    const ref2 = vec.load(V, ref2p, offset);
+                    const src = vec.load(V, srcp, offset);
+                    const minref = @min(ref1, ref2);
+                    const maxref = @max(ref1, ref2);
+                    const two: V = @splat(2);
+                    const lowref = if (comptime types.isInt(T)) minref -| (ref2 -| minref) else minref * two - ref2;
+                    const highref = if (comptime types.isInt(T)) (maxref -| ref2) +| maxref else maxref * two - ref2;
+                    vec.store(V, dstp, offset, std.math.clamp(src, lowref, highref));
+                }
+
+                for (column..width) |tail_column| {
+                    const offset = row_start + tail_column;
+                    const ref1 = ref1p[offset];
+                    const ref2 = ref2p[offset];
+                    const src = srcp[offset];
+                    const minref = @min(ref1, ref2);
+                    const maxref = @max(ref1, ref2);
+                    const lowref = if (comptime types.isInt(T)) minref -| (ref2 -| minref) else minref * 2 - ref2;
+                    const highref = if (comptime types.isInt(T)) (maxref -| ref2) +| maxref else maxref * 2 - ref2;
+                    dstp[offset] = std.math.clamp(src, lowref, highref);
+                }
+            }
+        }
+
+        fn clenseForwardBackwardF16(noalias dstp: []f16, noalias srcp: []const f16, noalias ref1p: []const f16, noalias ref2p: []const f16, width: usize, height: usize, stride: usize) void {
+            const V16 = @Vector(vec.getVecSize(f32), f16);
+            const V32 = @Vector(@typeInfo(V16).vector.len, f32);
+            const vector_len = @typeInfo(V16).vector.len;
+
+            for (0..height) |row| {
+                const row_start = row * stride;
+                var column: usize = 0;
+                while (column + vector_len <= width) : (column += vector_len) {
+                    const offset = row_start + column;
+                    const ref1: V32 = vec.loadF16AsF32(V16, V32, ref1p, offset);
+                    const ref2: V32 = vec.loadF16AsF32(V16, V32, ref2p, offset);
+                    const src: V32 = vec.loadF16AsF32(V16, V32, srcp, offset);
+                    const minref = @min(ref1, ref2);
+                    const maxref = @max(ref1, ref2);
+                    const two: V32 = @splat(2.0);
+                    const lowref = minref * two - ref2;
+                    const highref = maxref * two - ref2;
+                    vec.storeF32AsF16(V16, dstp, offset, std.math.clamp(src, lowref, highref));
+                }
+
+                for (column..width) |tail_column| {
+                    const offset = row_start + tail_column;
+                    const ref1: f32 = @floatCast(ref1p[offset]);
+                    const ref2: f32 = @floatCast(ref2p[offset]);
+                    const src: f32 = @floatCast(srcp[offset]);
+                    const minref = @min(ref1, ref2);
+                    const maxref = @max(ref1, ref2);
+                    dstp[offset] = @floatCast(std.math.clamp(src, minref * 2 - ref2, maxref * 2 - ref2));
+                }
+            }
+        }
+
         test clense {
-            const width = 3;
+            const width = vec.getVecSize(T) + 3;
             const height = 5;
-            const stride = 3;
-            const prev = [_]T{
-                3, 3, 3, //
-                3, 3, 3, //
-                3, 3, 3, //
-                3, 3, 3, //
-                3, 3, 3, //
-            };
-            const srcp = [_]T{
-                1, 1, 1, //
-                1, 1, 1, //
-                1, 1, 1, //
-                1, 1, 1, //
-                1, 1, 1, //
-            };
-            const next = [_]T{
-                5, 5, 5, //
-                5, 5, 5, //
-                5, 5, 5, //
-                5, 5, 5, //
-                5, 5, 5, //
-            };
+            const stride = width;
+            const prev = [_]T{3} ** (height * stride);
+            const srcp = [_]T{1} ** (height * stride);
+            const next = [_]T{5} ** (height * stride);
 
             const dstp = try testingAllocator.alloc(T, height * stride);
             defer testingAllocator.free(dstp);
 
             clense(dstp, &srcp, &prev, &next, width, height, stride);
 
-            const expected = [_]T{
-                3, 3, 3, //
-                3, 3, 3, //
-                3, 3, 3, //
-                3, 3, 3, //
-                3, 3, 3, //
-            };
+            const expected = [_]T{3} ** (height * stride);
             try std.testing.expectEqualDeep(&expected, dstp);
         }
 
         test clenseForwardBackward {
-            const width = 3;
+            const width = vec.getVecSize(T) + 3;
             const height = 5;
-            const stride = 3;
-            const ref1 = [_]T{
-                7, 7, 7, //
-                7, 7, 7, //
-                7, 7, 7, //
-                7, 7, 7, //
-                7, 7, 7, //
-            };
-            const srcp = [_]T{
-                1, 1, 1, //
-                1, 1, 1, //
-                1, 1, 1, //
-                1, 1, 1, //
-                1, 1, 1, //
-            };
-            const ref2 = [_]T{
-                5, 5, 5, //
-                5, 5, 5, //
-                5, 5, 5, //
-                5, 5, 5, //
-                5, 5, 5, //
-            };
+            const stride = width;
+            const ref1 = [_]T{7} ** (height * stride);
+            const srcp = [_]T{1} ** (height * stride);
+            const ref2 = [_]T{5} ** (height * stride);
 
             const dstp = try testingAllocator.alloc(T, height * stride);
             defer testingAllocator.free(dstp);
 
             clenseForwardBackward(dstp, &srcp, &ref1, &ref2, width, height, stride);
 
-            const expected = [_]T{
-                5, 5, 5, //
-                5, 5, 5, //
-                5, 5, 5, //
-                5, 5, 5, //
-                5, 5, 5, //
-            };
+            const expected = [_]T{5} ** (height * stride);
             try std.testing.expectEqualDeep(&expected, dstp);
         }
 

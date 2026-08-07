@@ -185,8 +185,8 @@ fn TemporalSoften(comptime T: type) type {
             defer testingAllocator.free(dstp_scalar);
             defer testingAllocator.free(dstp_vec);
 
-            processPlaneScalar(&src, dstp_scalar, width, height, stride, diameter, threshold);
-            processPlaneVector(&src, dstp_vec, width, height, stride, diameter, threshold);
+            processPlaneScalar(src[0..diameter], dstp_scalar, width, height, stride, threshold);
+            processPlaneVector(src[0..diameter], dstp_vec, width, height, stride, threshold);
 
             for (0..height) |row| {
                 const start = row * stride;
