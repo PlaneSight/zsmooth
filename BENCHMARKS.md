@@ -4,6 +4,40 @@ to provided the greatest stability of FPS numbers between runs.
 
 So while the benchmarks show fast results, you'll see even faster by using Zsmooth when using a fully threaded VapourSynth script.
 
+## Comparing revisions
+
+`benchmarks/compare_revisions.ts` builds two detached revisions with the same
+`ReleaseFast` settings, runs the existing benchmark runner in isolated
+directories, and compares its CSV results. The default baseline is `main`;
+`master` is used automatically when no local `main` ref exists.
+
+Run from the repository root:
+
+```sh
+bun benchmarks/compare_revisions.ts \
+  --baseline main \
+  --candidate HEAD \
+  --filter RemoveGrain \
+  --filter VerticalCleaner \
+  --plugin zsmooth \
+  --format u8 \
+  --format u16 \
+  --format f32 \
+  --format f16
+```
+
+Repeat `--filter`, `--plugin`, and `--format` to select a subset. Omitting
+those options runs the complete matrix. Use `--frame-count-scale` to shorten
+fixture workloads, `--iterations` (minimum 3) and `--warmup` to control
+sampling, and `--keep-worktrees` to retain temporary build trees for
+inspection. JSON and Markdown reports are written under `build/benchmarks/`,
+which is ignored by Git.
+
+The command requires Bun, Zig, `vspipe`, VapourSynth's Python package,
+`vspreview`, and any external plugins referenced by the selected fixtures. It
+prepends each revision's `zig-out/lib` to
+`VAPOURSYNTH_EXTRA_PLUGIN_PATH`, while preserving any existing search path.
+
 ## Table of Contents
 * [0.17 - Zig 0.15.2 - ARM NEON](#017---zig-0152---arm-neon-aarch64-macos)
 * [0.13 - Zig 0.15.2 - ARM NEON](#013---zig-0152---arm-neon-aarch64-macos)
