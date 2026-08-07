@@ -35,7 +35,7 @@ const { values: cliArgs } = parseArgs({
     },
     fast: {
       type: "boolean",
-      default: false,
+      default: true,
     },
     "fast-python": {
       type: "string",

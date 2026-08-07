@@ -45,15 +45,15 @@ prepends each revision's `zig-out/lib` to
 
 ## Fast direct-frame mode
 
-For a quick relative signal, pass `--fast` to run the selected fixture in a
-fresh Python process and time one selected output's `get_frame(frame)` request
-per sample. Each sample rebuilds the fixture graph and clears the VapourSynth
-cache, while warmups and measured iterations retain the normal runner policy:
+For a quick relative signal, the runner defaults to fast direct-frame mode,
+which runs the selected fixture in a fresh Python process and times one
+selected output's `get_frame(frame)` request per sample. Each sample rebuilds
+the fixture graph and clears the VapourSynth cache, while warmups and measured
+iterations retain the normal runner policy:
 
 ```sh
 VAPOURSYNTH_EXTRA_PLUGIN_PATH="$PWD/zig-out/lib" \
 bun benchmarks/run_benchmarks.ts \
-  --fast \
   --fast-python "${VAPOURSYNTH_PYTHON:-python3}" \
   --filter RemoveGrain \
   --plugin zsmooth \
