@@ -7,15 +7,12 @@ search path must be configured before the first VapourSynth import.
 from __future__ import annotations
 
 import argparse
-import copy
 import gc
 import hashlib
 import importlib
 import json
-import math
 import os
 import platform
-import statistics
 import sys
 import time
 from collections.abc import Iterable, Mapping
@@ -26,29 +23,43 @@ try:  # Permit both ``python -m benchmarks.harness`` and direct execution.
     from .catalog import (
         CATALOG,
         CATALOG_ORDER,
-        CATALOG_VERSION,
-        FORMAT_NAMES,
-        SCHEMA_VERSION,
         build_plan,
         canonical_json,
-        case_id,
-        plan_id,
         resolve_format,
         resolve_function,
+    )
+    from .schema import (
+        BenchmarkCase,
+        BenchmarkPlan,
+        BenchmarkResult,
+        CaseInput,
+        CaseResult,
+        JsonObject,
+        JsonValue,
+        SCHEMA_VERSION,
+        SampleStatistics,
+        SchemaError,
     )
 except ImportError:  # pragma: no cover - only used for direct script execution.
     from catalog import (  # type: ignore[no-redef]
         CATALOG,
         CATALOG_ORDER,
-        CATALOG_VERSION,
-        FORMAT_NAMES,
-        SCHEMA_VERSION,
         build_plan,
         canonical_json,
-        case_id,
-        plan_id,
         resolve_format,
         resolve_function,
+    )
+    from schema import (  # type: ignore[no-redef]
+        BenchmarkCase,
+        BenchmarkPlan,
+        BenchmarkResult,
+        CaseInput,
+        CaseResult,
+        JsonObject,
+        JsonValue,
+        SCHEMA_VERSION,
+        SampleStatistics,
+        SchemaError,
     )
 
 
@@ -252,76 +263,35 @@ def _load_vapoursynth(plugin_path: str | None) -> Any:
     return vs
 
 
-def _write_json(path: str | Path, value: Mapping[str, Any]) -> None:
+def _write_json(path: str | Path, value: JsonObject) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(canonical_json(value) + "\n", encoding="utf-8")
 
 
-def _read_json(path: str | Path) -> dict[str, Any]:
+def _read_plan(path: str | Path) -> BenchmarkPlan:
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise HarnessError(f"unable to read JSON plan {path}: {exc}") from exc
-    if not isinstance(value, dict):
-        raise HarnessError("plan JSON must contain an object")
-    return value
+    try:
+        return BenchmarkPlan.from_json(value)
+    except SchemaError as exc:
+        raise HarnessError(f"invalid benchmark plan: {exc}") from exc
 
 
-def _validate_plan(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
-    if plan.get("schema_version") != SCHEMA_VERSION:
-        raise HarnessError("unsupported plan schema_version")
-    if plan.get("catalog_version") != CATALOG_VERSION:
-        raise HarnessError("unsupported catalog_version")
-    cases = plan.get("cases")
-    if not isinstance(cases, list) or not cases:
-        raise HarnessError("plan must contain a non-empty cases array")
-    if plan.get("plan_id") != plan_id(plan):
-        raise HarnessError("plan_id does not match canonical plan content")
-
-    validated: list[dict[str, Any]] = []
-    for case in cases:
-        if not isinstance(case, dict):
-            raise HarnessError("every plan case must be an object")
+def _validate_plan(plan: BenchmarkPlan) -> tuple[BenchmarkCase, ...]:
+    for case in plan.cases:
         try:
-            function = resolve_function(case["function"])
-            format_name = resolve_format(case["format"])
-        except (KeyError, ValueError) as exc:
+            function = resolve_function(case.function)
+            format_name = resolve_format(case.format)
+        except ValueError as exc:
             raise HarnessError(f"invalid case function/format: {exc}") from exc
-        if function != case["function"] or format_name != case["format"]:
+        if function != case.function or format_name != case.format:
             raise HarnessError("plan cases must use canonical function and format names")
-        if format_name not in CATALOG[function]["formats"]:
+        if format_name not in CATALOG[function].formats:
             raise HarnessError(f"{function} does not support format {format_name}")
-        if not isinstance(case.get("kwargs"), dict):
-            raise HarnessError(f"{function} case kwargs must be an object")
-        input_info = case.get("input")
-        if not isinstance(input_info, dict):
-            raise HarnessError(f"{function} case input must be an object")
-        for field in ("version", "width", "height", "length", "frame_start", "reference"):
-            if field not in input_info:
-                raise HarnessError(f"case input is missing {field}")
-        if input_info["version"] != 1:
-            raise HarnessError("unsupported case input version")
-        if not isinstance(input_info["reference"], list):
-            raise HarnessError("case input reference must be a list")
-        if not isinstance(case.get("frame_count"), int) or case["frame_count"] <= 0:
-            raise HarnessError("case frame_count must be positive")
-        if (
-            not isinstance(input_info["width"], int)
-            or not isinstance(input_info["height"], int)
-            or not isinstance(input_info["length"], int)
-            or not isinstance(input_info["frame_start"], int)
-            or input_info["width"] < 1
-            or input_info["height"] < 1
-            or input_info["length"] < 1
-            or input_info["frame_start"] < 0
-            or input_info["frame_start"] + case["frame_count"] > input_info["length"]
-        ):
-            raise HarnessError("case input geometry or frame range is invalid")
-        if case.get("id") != case_id(case):
-            raise HarnessError(f"case id does not match {function}/{format_name}")
-        validated.append(case)
-    return validated
+    return plan.cases
 
 
 def _format_constant(vs: Any, format_name: str) -> Any:
@@ -342,16 +312,23 @@ def _blank_color(format_name: str, reference: bool) -> list[int | float]:
     raise HarnessError(f"unknown format {format_name}")
 
 
-def _blank_clip(vs: Any, core: Any, format_name: str, input_info: Mapping[str, Any], *, reference: bool) -> Any:
+def _blank_clip(
+    vs: Any,
+    core: Any,
+    format_name: str,
+    input_info: CaseInput,
+    *,
+    reference: bool,
+) -> Any:
     std = _read_attr(core, "std")
     blank = _read_attr(std, "BlankClip") if std is not None else None
     if not callable(blank):
         raise HarnessError("VapourSynth core.std.BlankClip is unavailable")
     return blank(
-        width=input_info["width"],
-        height=input_info["height"],
+        width=input_info.width,
+        height=input_info.height,
         format=_format_constant(vs, format_name),
-        length=input_info["length"],
+        length=input_info.length,
         color=_blank_color(format_name, reference),
     )
 
@@ -366,27 +343,26 @@ def _callable_for(plugin: Any, function_name: str) -> Any:
     raise HarnessError(f"discovered zsmooth function {function_name} is not callable")
 
 
-def _build_graph(vs: Any, plugin: Any, case: Mapping[str, Any]) -> tuple[Any, list[Any]]:
+def _build_graph(vs: Any, plugin: Any, case: BenchmarkCase) -> tuple[Any, list[Any]]:
     core = _core(vs)
-    input_info = case["input"]
-    source = _blank_clip(vs, core, case["format"], input_info, reference=False)
+    source = _blank_clip(vs, core, case.format, case.input, reference=False)
     clips = [source]
-    kwargs = copy.deepcopy(case["kwargs"])
-    for reference_name in input_info["reference"]:
+    kwargs = dict(case.kwargs)
+    for reference_name in case.input.reference_arguments:
         reference = _blank_clip(
-            vs, core, case["format"], input_info, reference=True
+            vs, core, case.format, case.input, reference=True
         )
         clips.append(reference)
         kwargs[reference_name] = reference
-    function = _callable_for(plugin, case["function"])
+    function = _callable_for(plugin, case.function)
     try:
         output = function(source, **kwargs)
     except Exception as exc:
         raise HarnessError(
-            f"{case['function']} failed while building {case['format']} graph: {exc}"
+            f"{case.function} failed while building {case.format} graph: {exc}"
         ) from exc
     if output is None or not callable(_read_attr(output, "get_frame")):
-        raise HarnessError(f"{case['function']} did not return a video node")
+        raise HarnessError(f"{case.function} did not return a video node")
     return output, clips
 
 
@@ -404,36 +380,36 @@ def _release_graph(vs: Any, node: Any, clips: list[Any]) -> None:
     _clear_cache(_core(vs))
 
 
-def _direct_sample(vs: Any, plugin: Any, case: Mapping[str, Any]) -> float:
+def _direct_sample(vs: Any, plugin: Any, case: BenchmarkCase) -> float:
     core = _core(vs)
     _clear_cache(core)
     node, clips = _build_graph(vs, plugin, case)
-    frame_number = case["input"]["frame_start"] + case["frame_count"] // 2
+    frame_number = case.input.frame_start + case.frame_count // 2
     try:
         start = time.perf_counter_ns()
         frame = node.get_frame(frame_number)
         elapsed = (time.perf_counter_ns() - start) / 1_000_000.0
         if frame is None:
-            raise HarnessError(f"{case['function']} returned no frame")
+            raise HarnessError(f"{case.function} returned no frame")
         del frame
         return elapsed
     finally:
         _release_graph(vs, node, clips)
 
 
-def _stream_sample(vs: Any, plugin: Any, case: Mapping[str, Any]) -> float:
+def _stream_sample(vs: Any, plugin: Any, case: BenchmarkCase) -> float:
     core = _core(vs)
     _clear_cache(core)
     node, clips = _build_graph(vs, plugin, case)
-    start_frame = case["input"]["frame_start"]
-    frame_count = case["frame_count"]
+    start_frame = case.input.frame_start
+    frame_count = case.frame_count
     try:
         start = time.perf_counter_ns()
         frames = []
         for offset in range(frame_count):
             frame = node.get_frame(start_frame + offset)
             if frame is None:
-                raise HarnessError(f"{case['function']} returned no frame")
+                raise HarnessError(f"{case.function} returned no frame")
             frames.append(frame)
         elapsed = (time.perf_counter_ns() - start) / 1_000_000.0
         # Report a per-frame sample while retaining the sequential stream timing.
@@ -443,40 +419,29 @@ def _stream_sample(vs: Any, plugin: Any, case: Mapping[str, Any]) -> float:
         _release_graph(vs, node, clips)
 
 
-def _statistics(samples: list[float]) -> dict[str, Any]:
-    if not samples or any(not math.isfinite(value) or value <= 0 for value in samples):
-        raise HarnessError("benchmark produced a non-finite or non-positive sample")
-    mean_ms = statistics.fmean(samples)
-    median_ms = statistics.median(samples)
-    fps = 1000.0 / median_ms
-    if not all(math.isfinite(value) and value > 0 for value in (mean_ms, median_ms, fps)):
-        raise HarnessError("benchmark statistics are not finite and positive")
-    return {
-        "samples_ms": samples,
-        "mean_ms": mean_ms,
-        "median_ms": median_ms,
-        "min_ms": min(samples),
-        "max_ms": max(samples),
-        "median_fps": fps,
-    }
+def _statistics(samples: list[float]) -> SampleStatistics:
+    try:
+        return SampleStatistics.from_samples(samples)
+    except SchemaError as exc:
+        raise HarnessError(f"invalid timing samples: {exc}") from exc
 
 
 def _run_case(
     vs: Any,
     plugin: Any,
-    case: Mapping[str, Any],
+    case: BenchmarkCase,
     timing: str,
     iterations: int,
     warmup: int,
-) -> dict[str, Any]:
+) -> CaseResult:
     sample = _direct_sample if timing == "direct" else _stream_sample
     for _ in range(warmup):
         sample(vs, plugin, case)
     samples = [sample(vs, plugin, case) for _ in range(iterations)]
-    return {"id": case["id"], **_statistics(samples)}
+    return CaseResult(identifier=case.identifier, statistics=_statistics(samples))
 
 
-def _value_for_environment(value: Any) -> Any:
+def _value_for_environment(value: Any) -> JsonValue:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, (list, tuple)):
@@ -486,8 +451,8 @@ def _value_for_environment(value: Any) -> Any:
     return str(value)
 
 
-def _environment(vs: Any, plugin: Any, plugin_path: str) -> dict[str, Any]:
-    values: dict[str, Any] = {
+def _environment(vs: Any, plugin: Any, plugin_path: str) -> JsonObject:
+    values: JsonObject = {
         "python": platform.python_version(),
         "python_implementation": platform.python_implementation(),
         "platform": platform.platform(),
@@ -539,16 +504,16 @@ def _command_plan(arguments: argparse.Namespace) -> int:
         _validate_discovery(discovery, selected_functions)
     # build_plan resolves IQM and validates explicit format allowlists.
     plan = build_plan(selected_functions, arguments.format or None)
-    _write_json(arguments.output, plan)
+    _write_json(arguments.output, plan.to_json())
     return 0
 
 
 def _command_run(arguments: argparse.Namespace) -> int:
-    plan = _read_json(arguments.plan)
+    plan = _read_plan(arguments.plan)
     cases = _validate_plan(plan)
     vs = _load_vapoursynth(arguments.plugin_path)
     plugin, discovery = discover_functions(vs)
-    _validate_discovery(discovery, [case["function"] for case in cases])
+    _validate_discovery(discovery, [case.function for case in cases])
     results = [
         _run_case(
             vs, plugin, case, arguments.timing, arguments.iterations, arguments.warmup
@@ -556,21 +521,20 @@ def _command_run(arguments: argparse.Namespace) -> int:
         for case in cases
     ]
     environment = _environment(vs, plugin, arguments.plugin_path)
-    result: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
-        "kind": "benchmark",
-        "plan_id": plan["plan_id"],
-        "timing": arguments.timing,
-        "config": {
+    result = BenchmarkResult(
+        plan_id=plan.identifier,
+        timing=arguments.timing,
+        config={
             "iterations": arguments.iterations,
             "warmup": arguments.warmup,
             "case_count": len(cases),
             "plugin_path": str(Path(arguments.plugin_path).expanduser()),
         },
-        "environment": environment,
-        "cases": results,
-    }
-    _write_json(arguments.output, result)
+        environment=environment,
+        cases=tuple(results),
+    )
+    result.validate_plan(plan)
+    _write_json(arguments.output, result.to_json())
     return 0
 
 

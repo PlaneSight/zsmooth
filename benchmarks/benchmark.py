@@ -12,11 +12,34 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
-SCHEMA_VERSION = 1
+try:
+    from .schema import (
+        BenchmarkPlan,
+        BenchmarkResult,
+        ComparisonRow,
+        ComparisonSummary,
+        JsonObject,
+        JsonValue,
+        SCHEMA_VERSION,
+        SchemaError,
+    )
+except ImportError:  # pragma: no cover - direct script execution.
+    from schema import (  # type: ignore[no-redef]
+        BenchmarkPlan,
+        BenchmarkResult,
+        ComparisonRow,
+        ComparisonSummary,
+        JsonObject,
+        JsonValue,
+        SCHEMA_VERSION,
+        SchemaError,
+    )
+
 BUILD_COMMAND = ("zig", "build", "-Doptimize=ReleaseFast")
 SOURCE_FUNCTIONS: dict[str, tuple[str, ...]] = {
     "src/ccd.zig": ("CCD",),
@@ -87,7 +110,7 @@ class Timing:
     iterations: int
     warmup: int
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self) -> JsonObject:
         return {"mode": self.mode, "iterations": self.iterations, "warmup": self.warmup}
 
 
@@ -314,18 +337,22 @@ def invoke_discover(repo_root: Path, runtime: str, plugin_path: Path) -> set[str
     return _names_from_discovery(_json_from_text(completed.stdout or ""))
 
 
-def _validate_plan(plan: Any) -> dict[str, Any]:
-    if not isinstance(plan, Mapping) or plan.get("schema_version") != SCHEMA_VERSION:
-        raise BenchmarkError(f"Unexpected plan schema version: {plan.get('schema_version') if isinstance(plan, Mapping) else None!r}")
-    if not isinstance(plan.get("plan_id"), str) or not plan["plan_id"] or not isinstance(plan.get("cases"), list):
-        raise BenchmarkError("Malformed harness plan")
-    ids = [str(case["id"]) for case in plan["cases"] if isinstance(case, Mapping) and "id" in case]
-    if len(ids) != len(plan["cases"]) or len(ids) != len(set(ids)):
-        raise BenchmarkError("Harness plan contains missing or duplicate case IDs")
-    return dict(plan)
+def _validate_plan(value: object) -> BenchmarkPlan:
+    try:
+        return BenchmarkPlan.from_json(value)
+    except SchemaError as exc:
+        raise BenchmarkError(f"Malformed harness plan: {exc}") from exc
 
 
-def invoke_plan(repo_root: Path, runtime: str, plugin_path: Path, output_path: Path, *, functions: Sequence[str] | None = None, formats: Sequence[str] | None = None) -> dict[str, Any]:
+def invoke_plan(
+    repo_root: Path,
+    runtime: str,
+    plugin_path: Path,
+    output_path: Path,
+    *,
+    functions: Sequence[str] | None = None,
+    formats: Sequence[str] | None = None,
+) -> BenchmarkPlan:
     command = [runtime, str(harness_path(repo_root)), "plan", "--output", str(output_path), "--plugin-path", str(plugin_path)]
     if functions is not None:
         for function in functions:
@@ -343,39 +370,31 @@ def invoke_plan(repo_root: Path, runtime: str, plugin_path: Path, output_path: P
 
 
 def _validate_result(
-    result: Any,
-    plan: Mapping[str, Any],
+    value: object,
+    plan: BenchmarkPlan,
     timing: Timing | None = None,
-) -> dict[str, Any]:
-    if not isinstance(result, Mapping) or result.get("schema_version") != SCHEMA_VERSION:
-        raise BenchmarkError("Unexpected result schema version")
-    if result.get("kind") != "benchmark":
-        raise BenchmarkError("Unexpected benchmark result kind")
-    result_timing = result.get("timing")
-    if not isinstance(result_timing, str):
-        raise BenchmarkError("Malformed benchmark result timing")
-    if timing is not None and result_timing != timing.mode:
+) -> BenchmarkResult:
+    try:
+        result = BenchmarkResult.from_json(value)
+        result.validate_plan(plan)
+    except SchemaError as exc:
+        raise BenchmarkError(f"Malformed harness result: {exc}") from exc
+    if timing is not None and result.timing != timing.mode:
         raise BenchmarkError(
-            f"Result timing {result_timing!r} does not match {timing.mode!r}"
+            f"Result timing {result.timing!r} does not match {timing.mode!r}"
         )
-    if not isinstance(result.get("environment"), Mapping):
-        raise BenchmarkError("Malformed benchmark result environment")
-    if result.get("plan_id") != plan.get("plan_id"):
-        raise BenchmarkError(f"Result plan_id {result.get('plan_id')!r} does not match {plan.get('plan_id')!r}")
-    cases = result.get("cases")
-    if not isinstance(cases, list):
-        raise BenchmarkError("Malformed harness result cases")
-    expected = {str(case["id"]) for case in plan.get("cases", [])}
-    actual = [str(case["id"]) for case in cases if isinstance(case, Mapping) and "id" in case]
-    if len(actual) != len(cases) or len(actual) != len(set(actual)):
-        raise BenchmarkError("Harness result contains missing or duplicate case IDs")
-    missing, unexpected = sorted(expected - set(actual)), sorted(set(actual) - expected)
-    if missing or unexpected:
-        raise BenchmarkError(f"Unexpected benchmark case IDs (missing={missing}, unexpected={unexpected})")
-    return dict(result)
+    return result
 
 
-def invoke_run(repo_root: Path, runtime: str, plugin_path: Path, plan_path: Path, output_path: Path, timing: Timing, plan: Mapping[str, Any]) -> dict[str, Any]:
+def invoke_run(
+    repo_root: Path,
+    runtime: str,
+    plugin_path: Path,
+    plan_path: Path,
+    output_path: Path,
+    timing: Timing,
+    plan: BenchmarkPlan,
+) -> BenchmarkResult:
     command = [runtime, str(harness_path(repo_root)), "run", "--plugin-path", str(plugin_path), "--plan", str(plan_path), "--output", str(output_path), "--timing", timing.mode, "--iterations", str(timing.iterations), "--warmup", str(timing.warmup)]
     run_command(command, repo_root, env=_harness_environment(plugin_path))
     if not output_path.is_file():
@@ -411,7 +430,7 @@ def cleanup_worktrees(repo_root: Path, worktrees: Sequence[Path], temp_root: Pat
     shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def environment_snapshot(runtime: str) -> dict[str, Any]:
+def environment_snapshot(runtime: str) -> JsonObject:
     return {
         "platform": platform.platform(), "system": platform.system(), "release": platform.release(),
         "machine": platform.machine(), "processor": platform.processor(),
@@ -421,7 +440,7 @@ def environment_snapshot(runtime: str) -> dict[str, Any]:
     }
 
 
-def environment_id(environment: Mapping[str, Any]) -> str:
+def environment_id(environment: Mapping[str, JsonValue]) -> str:
     stable = {key: value for key, value in environment.items() if key != "extra_plugin_path"}
     digest = hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
     version = str(environment.get("python_version", "0")).split(".")
@@ -429,11 +448,8 @@ def environment_id(environment: Mapping[str, Any]) -> str:
     return "".join(char if char.isalnum() or char in "-._" else "_" for char in label)
 
 
-def _result_environment(result: Mapping[str, Any]) -> tuple[dict[str, Any], str] | None:
-    value = result.get("environment")
-    if not isinstance(value, Mapping):
-        return None
-    metadata = dict(value)
+def _result_environment(result: BenchmarkResult) -> tuple[JsonObject, str]:
+    metadata = dict(result.environment)
     identifier = metadata.get("id")
     if isinstance(identifier, str) and identifier:
         return metadata, identifier
@@ -441,16 +457,15 @@ def _result_environment(result: Mapping[str, Any]) -> tuple[dict[str, Any], str]
 
 
 def _comparison_environment(
-    baseline_result: Mapping[str, Any],
-    candidate_result: Mapping[str, Any],
-    fallback: Mapping[str, Any],
-) -> tuple[dict[str, Any], str]:
+    baseline_result: BenchmarkResult | None,
+    candidate_result: BenchmarkResult | None,
+    fallback: JsonObject,
+) -> tuple[JsonObject, str]:
     # Prefer the candidate result, then baseline, so role order makes fallback
     # behavior deterministic when both harness runs expose metadata.
     for result in (candidate_result, baseline_result):
-        resolved = _result_environment(result)
-        if resolved is not None:
-            return resolved
+        if result is not None:
+            return _result_environment(result)
     metadata = dict(fallback)
     identifier = metadata.get("id")
     if isinstance(identifier, str) and identifier:
@@ -497,31 +512,53 @@ def _timing_from_args(args: argparse.Namespace) -> Timing:
 
 
 
-def _median(case: Mapping[str, Any]) -> float | None:
-    value = case.get("median_ms")
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
-
-
-def compare_cases(plan: Mapping[str, Any], baseline_result: Mapping[str, Any], candidate_result: Mapping[str, Any], added_functions: Sequence[str], removed_functions: Sequence[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    baseline_by_id = {str(case["id"]): case for case in baseline_result.get("cases", [])}
-    candidate_by_id = {str(case["id"]): case for case in candidate_result.get("cases", [])}
-    rows: list[dict[str, Any]] = []
-    ratios: list[float] = []
-    for plan_case in plan.get("cases", []):
-        case_id = str(plan_case["id"])
-        baseline_median, candidate_median = _median(baseline_by_id[case_id]), _median(candidate_by_id[case_id])
-        if baseline_median is None or candidate_median is None or not math.isfinite(baseline_median) or not math.isfinite(candidate_median) or baseline_median <= 0 or candidate_median <= 0:
-            raise BenchmarkError(f"Case {case_id} has an invalid median_ms")
-        ratio = candidate_median / baseline_median
-        delta = candidate_median - baseline_median
-        ratios.append(ratio)
-        rows.append({"id": case_id, "function": plan_case.get("function"), "format": plan_case.get("format"), "status": "comparable", "baseline_median_ms": baseline_median, "candidate_median_ms": candidate_median, "delta_ms": delta, "median_delta_ms": delta, "delta_pct": (ratio - 1.0) * 100.0, "ratio": ratio})
+def compare_cases(
+    plan: BenchmarkPlan | None,
+    baseline_result: BenchmarkResult | None,
+    candidate_result: BenchmarkResult | None,
+    added_functions: Sequence[str],
+    removed_functions: Sequence[str],
+) -> tuple[list[ComparisonRow], ComparisonSummary]:
+    baseline_by_id = (
+        {case.identifier: case for case in baseline_result.cases}
+        if baseline_result is not None
+        else {}
+    )
+    candidate_by_id = (
+        {case.identifier: case for case in candidate_result.cases}
+        if candidate_result is not None
+        else {}
+    )
+    rows: list[ComparisonRow] = []
+    for plan_case in plan.cases if plan is not None else ():
+        case_id = plan_case.identifier
+        try:
+            baseline_median = baseline_by_id[case_id].statistics.median_ms
+            candidate_median = candidate_by_id[case_id].statistics.median_ms
+        except KeyError as exc:
+            raise BenchmarkError(f"Case {case_id} is missing from a benchmark result") from exc
+        rows.append(
+            ComparisonRow(
+                status="comparable",
+                identifier=case_id,
+                function=plan_case.function,
+                format=plan_case.format,
+                baseline_median_ms=baseline_median,
+                candidate_median_ms=candidate_median,
+            )
+        )
     for function in sorted(set(added_functions)):
-        rows.append({"id": None, "function": function, "format": None, "status": "added", "baseline_median_ms": None, "candidate_median_ms": None, "delta_ms": None, "median_delta_ms": None, "delta_pct": None, "ratio": None, "na": "added function"})
+        rows.append(ComparisonRow(status="added", function=function))
     for function in sorted(set(removed_functions)):
-        rows.append({"id": None, "function": function, "format": None, "status": "removed", "baseline_median_ms": None, "candidate_median_ms": None, "delta_ms": None, "median_delta_ms": None, "delta_pct": None, "ratio": None, "na": "removed function"})
+        rows.append(ComparisonRow(status="removed", function=function))
+    ratios = [ratio for row in rows if (ratio := row.ratio) is not None]
     geometric_ratio = math.exp(sum(math.log(value) for value in ratios) / len(ratios)) if ratios else None
-    return rows, {"comparable_cases": len(ratios), "added_functions": len(set(added_functions)), "removed_functions": len(set(removed_functions)), "geometric_ratio": geometric_ratio, "ratio_definition": "candidate_median_ms / baseline_median_ms; lower is faster"}
+    return rows, ComparisonSummary(
+        comparable_cases=len(ratios),
+        added_functions=len(set(added_functions)),
+        removed_functions=len(set(removed_functions)),
+        geometric_ratio=geometric_ratio,
+    )
 
 
 def _common_functions(all_functions: bool, mapped: set[str], baseline: set[str], candidate: set[str]) -> tuple[list[str], list[str], list[str]]:
@@ -546,18 +583,13 @@ def run_reference(args: argparse.Namespace) -> int:
         plan_path, result_path = temp_root / "reference-plan.json", temp_root / "reference-result.json"
         plan = invoke_plan(repo_root, runtime, plugin_path, plan_path)
         result = invoke_run(repo_root, runtime, plugin_path, plan_path, result_path, timing, plan)
-        resolved_environment = _result_environment(result)
-        if resolved_environment is None:
-            environment = environment_snapshot(runtime)
-            env_id = environment_id(environment)
-        else:
-            environment, env_id = resolved_environment
+        environment, env_id = _result_environment(result)
         output = _output_path(repo_root, args.output, repo_root / "benchmarks" / "references" / env_id / f"{revision.commit}.json")
         raw_paths = _persist_raw_artifacts(
             output,
             {"reference-plan.json": plan_path, "reference-result.json": result_path},
         )
-        _write_json(output, {"schema_version": SCHEMA_VERSION, "kind": "benchmark-reference", "catalog_version": plan.get("catalog_version"), "plan_id": plan["plan_id"], "merge_base": None, "requested_refs": {"reference": revision.requested}, "resolved_refs": {"reference": _revision_json(revision)}, "changed_files": [], "changed_functions": [], "timing": timing.as_dict(), "build_config": build_config(), "environment_id": env_id, "environment": environment, "raw_result_paths": {"reference": raw_paths["reference-result.json"]}, "raw_plan_path": raw_paths["reference-plan.json"], "cases": result.get("cases", []), "result": result})
+        _write_json(output, {"schema_version": SCHEMA_VERSION, "kind": "benchmark-reference", "catalog_version": plan.catalog_version, "plan_id": plan.identifier, "merge_base": None, "requested_refs": {"reference": revision.requested}, "resolved_refs": {"reference": _revision_json(revision)}, "changed_files": [], "changed_functions": [], "timing": timing.as_dict(), "build_config": build_config(), "environment_id": env_id, "environment": environment, "raw_result_paths": {"reference": raw_paths["reference-result.json"]}, "raw_plan_path": raw_paths["reference-plan.json"], "cases": [case.to_json() for case in result.cases], "result": result.to_json()})
         print(f"Wrote reference benchmark for {revision.commit} to {output}")
         return 0
     finally:
@@ -615,13 +647,13 @@ def run_compare(args: argparse.Namespace) -> int:
             )
         else:
             plan = None
-            baseline_result = {}
-            candidate_result = {}
+            baseline_result = None
+            candidate_result = None
             raw_paths = None
-        rows, summary = compare_cases(plan or {}, baseline_result, candidate_result, added, removed)
+        rows, summary = compare_cases(plan, baseline_result, candidate_result, added, removed)
         environment, env_id = _comparison_environment(baseline_result, candidate_result, environment)
-        report_catalog_version = plan.get("catalog_version") if isinstance(plan, Mapping) else None
-        report_plan_id = plan.get("plan_id") if isinstance(plan, Mapping) else None
+        report_catalog_version = plan.catalog_version if plan is not None else None
+        report_plan_id = plan.identifier if plan is not None else None
         report_raw_results = (
             {
                 "baseline": raw_paths["baseline-result.json"],
@@ -631,9 +663,9 @@ def run_compare(args: argparse.Namespace) -> int:
             else {"baseline": None, "candidate": None}
         )
         report_raw_plan = raw_paths["compare-plan.json"] if raw_paths is not None else None
-        report = {"schema_version": SCHEMA_VERSION, "kind": "benchmark-comparison", "catalog_version": report_catalog_version, "plan_id": report_plan_id, "merge_base": merge_base, "requested_refs": {"baseline": baseline.requested, "candidate": candidate.requested}, "resolved_refs": {"baseline": _revision_json(baseline), "candidate": _revision_json(candidate)}, "changed_files": files, "changed_functions": changed, "added_functions": added, "removed_functions": removed, "timing": timing.as_dict(), "build_config": build_config(), "environment_id": env_id, "environment": environment, "raw_result_paths": report_raw_results, "raw_plan_path": report_raw_plan, "cases": rows, "summary": summary}
+        report = {"schema_version": SCHEMA_VERSION, "kind": "benchmark-comparison", "catalog_version": report_catalog_version, "plan_id": report_plan_id, "merge_base": merge_base, "requested_refs": {"baseline": baseline.requested, "candidate": candidate.requested}, "resolved_refs": {"baseline": _revision_json(baseline), "candidate": _revision_json(candidate)}, "changed_files": files, "changed_functions": changed, "added_functions": added, "removed_functions": removed, "timing": timing.as_dict(), "build_config": build_config(), "environment_id": env_id, "environment": environment, "raw_result_paths": report_raw_results, "raw_plan_path": report_raw_plan, "cases": [row.to_json() for row in rows], "summary": summary.to_json()}
         _write_json(output, report)
-        print(f"Compared {summary['comparable_cases']} cases (geometric ratio: {summary['geometric_ratio']!r}); wrote {output}")
+        print(f"Compared {summary.comparable_cases} cases (geometric ratio: {summary.geometric_ratio!r}); wrote {output}")
         return 0
     finally:
         if not args.keep_worktrees:

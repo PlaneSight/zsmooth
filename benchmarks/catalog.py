@@ -7,15 +7,35 @@ expansion and stable IDs also work without importing VapourSynth.
 
 from __future__ import annotations
 
-import copy
 import hashlib
-import json
 from collections.abc import Iterable, Mapping
-from typing import Any
+from dataclasses import dataclass
 
-SCHEMA_VERSION = 1
-CATALOG_VERSION = "1"
-INPUT_VERSION = 1
+try:
+    from .schema import (
+        BenchmarkCase,
+        BenchmarkPlan,
+        CATALOG_VERSION,
+        CaseInput,
+        INPUT_VERSION,
+        JsonObject,
+        JsonValue,
+        SCHEMA_VERSION,
+        canonical_json,
+    )
+except ImportError:  # pragma: no cover - direct script execution.
+    from schema import (  # type: ignore[no-redef]
+        BenchmarkCase,
+        BenchmarkPlan,
+        CATALOG_VERSION,
+        CaseInput,
+        INPUT_VERSION,
+        JsonObject,
+        JsonValue,
+        SCHEMA_VERSION,
+        canonical_json,
+    )
+
 DEFAULT_WIDTH = 64
 DEFAULT_HEIGHT = 48
 DEFAULT_LENGTH = 32
@@ -40,7 +60,7 @@ _NO_F16 = ["u8", "u16", "f32"]
 # Each source/signature reference points at a registration declaration in
 # src/*.zig. reference_args names additional vnode arguments that the harness
 # creates as deterministic BlankClips.
-CATALOG: dict[str, dict[str, Any]] = {
+_RAW_CATALOG: dict[str, JsonObject] = {
     "Clense": {
         "source": "src/clense.zig:452-455",
         "signature": "clip:vnode;previous:vnode:opt;next:vnode:opt;planes:int[]:opt",
@@ -201,28 +221,70 @@ CATALOG: dict[str, dict[str, Any]] = {
 }
 
 
-def canonical_json(value: Any) -> str:
-    """Serialize JSON deterministically for files and SHA-256 identifiers."""
+@dataclass(frozen=True, slots=True)
+class FilterSpec:
+    """One plugin capability and the representative invocations to measure."""
 
-    return json.dumps(
-        value, ensure_ascii=False, allow_nan=False, sort_keys=True,
-        separators=(",", ":"),
-    )
+    source: str
+    signature: str
+    formats: tuple[str, ...]
+    topology: str
+    reference_arguments: tuple[str, ...]
+    cases: tuple[JsonObject, ...]
+    aliases: tuple[str, ...] = ()
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, object]) -> FilterSpec:
+        formats = value.get("formats")
+        references = value.get("reference_args")
+        cases = value.get("cases")
+        aliases = value.get("aliases", [])
+        if not isinstance(formats, list) or not all(isinstance(item, str) for item in formats):
+            raise ValueError("catalog formats must be a string array")
+        if not isinstance(references, list) or not all(isinstance(item, str) for item in references):
+            raise ValueError("catalog reference_args must be a string array")
+        if not isinstance(cases, list) or not all(isinstance(item, dict) for item in cases):
+            raise ValueError("catalog cases must be an object array")
+        if not isinstance(aliases, list) or not all(isinstance(item, str) for item in aliases):
+            raise ValueError("catalog aliases must be a string array")
+        source = value.get("source")
+        signature = value.get("signature")
+        topology = value.get("topology")
+        if not all(isinstance(item, str) and item for item in (source, signature, topology)):
+            raise ValueError("catalog source, signature, and topology must be non-empty strings")
+        return cls(
+            source=source,
+            signature=signature,
+            formats=tuple(formats),
+            topology=topology,
+            reference_arguments=tuple(references),
+            cases=tuple(dict(case) for case in cases),
+            aliases=tuple(aliases),
+        )
 
 
-def _sha256(value: Any) -> str:
+CATALOG: dict[str, FilterSpec] = {
+    name: FilterSpec.from_json(spec) for name, spec in _RAW_CATALOG.items()
+}
+
+
+def _sha256(value: JsonValue) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def case_id(case: Mapping[str, Any]) -> str:
+def case_id(case: Mapping[str, JsonValue]) -> str:
     """Return the stable ID for a case, ignoring a previously stored id."""
 
     return _sha256({key: value for key, value in case.items() if key != "id"})
 
 
-def plan_id(plan_or_cases: Mapping[str, Any] | Iterable[Mapping[str, Any]]) -> str:
+def plan_id(
+    plan_or_cases: BenchmarkPlan | Mapping[str, JsonValue] | Iterable[Mapping[str, JsonValue]],
+) -> str:
     """Return the stable ID for a plan or an iterable of plan cases."""
 
+    if isinstance(plan_or_cases, BenchmarkPlan):
+        return plan_or_cases.identifier
     if isinstance(plan_or_cases, Mapping):
         material = {
             key: value for key, value in plan_or_cases.items() if key != "plan_id"
@@ -293,7 +355,7 @@ def build_cases(
     height: int = DEFAULT_HEIGHT,
     length: int = DEFAULT_LENGTH,
     frame_count: int = DEFAULT_FRAME_COUNT,
-) -> list[dict[str, Any]]:
+) -> list[BenchmarkCase]:
     """Expand catalog capabilities into deterministic, JSON-safe plan cases."""
 
     if width < 1 or height < 1 or length < 1:
@@ -306,11 +368,11 @@ def build_cases(
     names = _selected_names(functions)
     requested_formats = _selected_formats(formats)
     frame_start = (length - frame_count) // 2
-    cases: list[dict[str, Any]] = []
+    cases: list[BenchmarkCase] = []
 
     for function in names:
         capability = CATALOG[function]
-        allowed_formats = [resolve_format(item) for item in capability["formats"]]
+        allowed_formats = [resolve_format(item) for item in capability.formats]
         chosen_formats = [
             format_name
             for format_name in (requested_formats or allowed_formats)
@@ -324,20 +386,23 @@ def build_cases(
                 )
             continue
         for format_name in chosen_formats:
-            for kwargs in capability["cases"]:
-                case: dict[str, Any] = {
-                    "function": function, "format": format_name,
-                    "kwargs": copy.deepcopy(kwargs),
-                    "input": {
-                        "version": INPUT_VERSION, "width": width, "height": height,
-                        "length": length, "frame_start": frame_start,
-                        "reference": list(capability["reference_args"]),
-                        "topology": capability["topology"],
-                    },
-                    "frame_count": frame_count,
-                }
-                case["id"] = case_id(case)
-                cases.append(case)
+            for kwargs in capability.cases:
+                cases.append(
+                    BenchmarkCase(
+                        function=function,
+                        format=format_name,
+                        kwargs=dict(kwargs),
+                        input=CaseInput(
+                            width=width,
+                            height=height,
+                            length=length,
+                            frame_start=frame_start,
+                            reference_arguments=capability.reference_arguments,
+                            topology=capability.topology,
+                        ),
+                        frame_count=frame_count,
+                    )
+                )
     if requested_formats is not None and not cases:
         raise ValueError(
             "no requested formats are supported by selected functions: "
@@ -350,17 +415,10 @@ def build_plan(
     functions: Iterable[str] | None = None,
     formats: Iterable[str] | None = None,
     **input_options: int,
-) -> dict[str, Any]:
+) -> BenchmarkPlan:
     """Build a complete plan and its stable ID."""
 
-    plan: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
-        "catalog_version": CATALOG_VERSION,
-        "namespace": "zsmooth",
-        "cases": build_cases(functions, formats, **input_options),
-    }
-    plan["plan_id"] = plan_id(plan)
-    return plan
+    return BenchmarkPlan(cases=tuple(build_cases(functions, formats, **input_options)))
 
 
 iter_cases = build_cases
