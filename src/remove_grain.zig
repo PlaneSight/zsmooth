@@ -1168,7 +1168,6 @@ fn RemoveGrain(comptime T: type) type {
             }
         }
 
-
         test shouldSkipLine {
             // Skip odd lines (process even lines) for mode 13 and 15
             try std.testing.expectEqual(false, shouldSkipLine(13, 2));
@@ -1194,7 +1193,41 @@ fn RemoveGrain(comptime T: type) type {
         }
 
         test "SIMD modes match scalar reference" {
-            if (comptime T == f16) return;
+            if (comptime T == f16) {
+                const vector_len = vec.getVecSize(T);
+                const widths = [_]usize{
+                    if (vector_len > 1) vector_len - 1 else vector_len,
+                    vector_len,
+                    vector_len + 1,
+                    vector_len + 3,
+                };
+                const height = 5;
+
+                for (widths) |width| {
+                    const stride = width + 2;
+                    const size = height * stride;
+                    const srcp = try testing.allocator.alloc(T, size);
+                    defer testing.allocator.free(srcp);
+                    const scalar = try testing.allocator.alloc(T, size);
+                    defer testing.allocator.free(scalar);
+                    const simd = try testing.allocator.alloc(T, size);
+                    defer testing.allocator.free(simd);
+
+                    for (srcp, 0..) |*pixel, i| {
+                        pixel.* = @floatFromInt((i * 37) % 251);
+                    }
+
+                    @memset(scalar, 0);
+                    @memset(simd, 0);
+                    processPlaneScalar(1, srcp, scalar, width, height, stride, false);
+                    processPlaneVector(1, srcp, simd, width, height, stride, false);
+                    for (0..height) |row| {
+                        const row_start = row * stride;
+                        try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                    }
+                }
+                return;
+            }
 
             const width = vec.getVecSize(T) + 3;
             const height = 5;
@@ -1270,14 +1303,14 @@ fn RemoveGrain(comptime T: type) type {
             try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(24, V, grid, false));
         }
 
-
         fn processPlane(mode: u5, noalias srcp8: []const u8, noalias dstp8: []u8, width: usize, height: usize, stride8: usize, chroma: bool) void {
             const stride = stride8 / @sizeOf(T);
             const srcp: []const T = @ptrCast(@alignCast(srcp8));
             const dstp: []T = @ptrCast(@alignCast(dstp8));
 
             switch (mode) {
-                inline 1...12, 17 => |m| if (comptime T == f16)
+                1 => processPlaneVector(1, srcp, dstp, width, height, stride, chroma),
+                inline 2...12, 17 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
