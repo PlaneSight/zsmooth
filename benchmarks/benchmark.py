@@ -473,8 +473,12 @@ def _comparison_environment(
     return metadata, environment_id(metadata)
 
 
-def build_config() -> dict[str, Any]:
-    return {"command": list(BUILD_COMMAND), "optimize": "ReleaseFast", "detached_worktrees": True}
+def build_config(*, detached_worktrees: bool = True) -> dict[str, Any]:
+    return {
+        "command": list(BUILD_COMMAND),
+        "optimize": "ReleaseFast",
+        "detached_worktrees": detached_worktrees,
+    }
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -502,12 +506,81 @@ def _revision_json(revision: Revision) -> dict[str, str]:
     return {"requested": revision.requested, "resolved_ref": revision.ref, "commit": revision.commit}
 
 
-def _timing_from_args(args: argparse.Namespace) -> Timing:
-    if args.iterations < 3:
-        raise BenchmarkError("--iterations must be an integer of at least 3")
+def _timing_from_args(args: argparse.Namespace, *, minimum_iterations: int = 3) -> Timing:
+    if args.iterations < minimum_iterations:
+        raise BenchmarkError(f"--iterations must be an integer of at least {minimum_iterations}")
     if args.warmup <= 0:
         raise BenchmarkError("--warmup must be a positive integer")
     return Timing(args.timing, args.iterations, args.warmup)
+
+
+def _local_plugin_path(repo_root: Path, requested: str | None) -> Path:
+    path = Path(requested).expanduser() if requested else repo_root / "zig-out" / "lib"
+    return path if path.is_absolute() else (repo_root / path).resolve()
+
+
+def _run_local(args: argparse.Namespace) -> int:
+    repo_root = resolve_repo_root()
+    runtime = python_runtime(args.python_runtime)
+    timing = _timing_from_args(args, minimum_iterations=1)
+    plugin_path = _local_plugin_path(repo_root, args.plugin_path)
+    if not args.no_build:
+        print(f"Building {repo_root} with {_command_text(BUILD_COMMAND)}")
+        run_command(BUILD_COMMAND, repo_root)
+    verify_plugin(plugin_path)
+
+    revision = resolve_ref(repo_root, "HEAD")
+    temp_root = Path(tempfile.mkdtemp(prefix="zsmooth-benchmark-"))
+    try:
+        plan_path, result_path = temp_root / "quick-plan.json", temp_root / "quick-result.json"
+        plan = invoke_plan(
+            repo_root,
+            runtime,
+            plugin_path,
+            plan_path,
+            functions=args.functions or None,
+            formats=args.formats,
+        )
+        result = invoke_run(repo_root, runtime, plugin_path, plan_path, result_path, timing, plan)
+        environment, env_id = _result_environment(result)
+        output = _output_path(
+            repo_root,
+            args.output,
+            repo_root / "benchmarks" / "results" / f"{revision.commit}-quick.json",
+        )
+        raw_paths = _persist_raw_artifacts(
+            output,
+            {"quick-plan.json": plan_path, "quick-result.json": result_path},
+        )
+        report = {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "benchmark-local",
+            "catalog_version": plan.catalog_version,
+            "plan_id": plan.identifier,
+            "requested_refs": {"revision": revision.requested},
+            "resolved_refs": {"revision": _revision_json(revision)},
+            "changed_files": [],
+            "changed_functions": [],
+            "timing": timing.as_dict(),
+            "build_config": {
+                **build_config(detached_worktrees=False),
+                "built": not args.no_build,
+                "plugin_path": str(plugin_path),
+            },
+            "environment_id": env_id,
+            "environment": environment,
+            "raw_result_paths": {"result": raw_paths["quick-result.json"]},
+            "raw_plan_path": raw_paths["quick-plan.json"],
+            "cases": [case.to_json() for case in result.cases],
+            "result": result.to_json(),
+        }
+        _write_json(output, report)
+        print(f"Benchmarked {len(result.cases)} cases; wrote {output}")
+        return 0
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 
 
 
@@ -677,6 +750,20 @@ def run_compare(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build immutable zsmooth revisions and run the canonical benchmark harness.")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    quick = subparsers.add_parser(
+        "quick",
+        help="build the current checkout and run one local benchmark command",
+    )
+    quick.add_argument("--function", dest="functions", action="append", default=[])
+    quick.add_argument("--format", dest="formats", action="append", default=[])
+    quick.add_argument("--plugin-path", help="use this built plugin directory instead of zig-out/lib")
+    quick.add_argument("--no-build", action="store_true", help="reuse the plugin already present at --plugin-path")
+    quick.add_argument("--python", "--python-runtime", dest="python_runtime")
+    quick.add_argument("--iterations", type=int, default=1)
+    quick.add_argument("--warmup", type=int, default=1)
+    quick.add_argument("--timing", choices=("direct", "stream"), default="direct")
+    quick.add_argument("--output")
+
     reference = subparsers.add_parser("reference", help="build one revision and run the complete catalog")
     reference.add_argument("ref_pos", nargs="?", help="revision to benchmark (default: HEAD)")
     reference.add_argument("--ref", dest="ref_option")
@@ -704,6 +791,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "quick":
+            return _run_local(args)
         return run_reference(args) if args.command == "reference" else run_compare(args)
     except (BenchmarkError, OSError, ValueError) as error:
         print(f"benchmark: {error}", file=sys.stderr)

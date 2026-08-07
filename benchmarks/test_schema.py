@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import unittest
 
-from benchmarks.benchmark import BenchmarkError, Timing, _validate_result, compare_cases
+from benchmarks.benchmark import BenchmarkError, Timing, _validate_result, build_parser, compare_cases
+
 from benchmarks.catalog import build_plan
 from benchmarks.schema import BenchmarkPlan, BenchmarkResult, CaseResult, SchemaError
 
@@ -37,6 +38,17 @@ def _result_for(plan: BenchmarkPlan, /, *, median_ms: float = 2.0) -> BenchmarkR
 
 
 class BenchmarkSchemaTests(unittest.TestCase):
+    def test_quick_cli_defaults_to_fast_local_run(self) -> None:
+        arguments = build_parser().parse_args(["quick"])
+
+        self.assertEqual(arguments.command, "quick")
+        self.assertEqual(arguments.functions, [])
+        self.assertEqual(arguments.formats, [])
+        self.assertEqual(arguments.iterations, 1)
+        self.assertEqual(arguments.warmup, 1)
+        self.assertEqual(arguments.timing, "direct")
+        self.assertFalse(arguments.no_build)
+
     def test_plan_round_trip_preserves_stable_identifiers(self) -> None:
         plan = build_plan(functions=["IQM"], formats=["u8"], width=80, height=48)
 

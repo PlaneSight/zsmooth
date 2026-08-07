@@ -5,7 +5,42 @@ implemented by `benchmarks/harness.py`. Run the commands below from the
 repository root. The harness builds deterministic BlankClip inputs and writes
 JSON plans and results; it does not use hand-written benchmark fixtures.
 
+## One-command local benchmark
+
+Run a fast benchmark against the current checkout with one command:
+
+```sh
+python -m benchmarks quick \
+  --function Median \
+  --format f16
+```
+
+The command builds the current checkout with `zig build -Doptimize=ReleaseFast`,
+generates the plan, runs the selected cases with one warmup and one measured
+iteration, and saves a report to
+`benchmarks/results/<commit>-quick.json` with raw plan/result JSON beside it.
+Omit `--function` and `--format` to run the complete generated catalog. Use
+`--no-build` when `zig-out/lib` is already built and only the benchmark needs to
+be repeated:
+
+```sh
+python -m benchmarks quick \
+  --function Median \
+  --format f16 \
+  --no-build \
+  --iterations 7 \
+  --warmup 1
+```
+
+Use `--output PATH` to choose a different durable report path. The existing
+`reference` and `compare` commands remain the reproducible detached-worktree
+workflow for revision measurements.
+
 ## Canonical harness workflow
+
+The commands in this section are lower-level building blocks for debugging or
+custom integrations; normal local iteration should use the one-command
+`python -m benchmarks quick` workflow above.
 
 Discover the zsmooth functions exposed by a built plugin:
 
