@@ -1315,7 +1315,7 @@ fn Repair(comptime T: type) type {
             }
         }
 
-        test "FP16 SIMD Repair modes 1-4, 11-14, 17, and 20 match scalar reference" {
+        test "FP16 SIMD Repair modes 1-4, 11-14, 17, 20, and 22 match scalar reference" {
             if (comptime T != f16) return;
 
             const vector_len = vec.getVecSize(T);
@@ -1346,7 +1346,7 @@ fn Repair(comptime T: type) type {
                     pixel.* = @floatFromInt((i * 29 + 3) % 251);
                 }
 
-                inline for ([_]comptime_int{ 1, 2, 3, 4, 11, 12, 13, 14, 17, 20 }) |mode| {
+                inline for ([_]comptime_int{ 1, 2, 3, 4, 11, 12, 13, 14, 17, 20, 22 }) |mode| {
                     inline for ([_]bool{ false, true }) |chroma| {
                         @memset(scalar, 0);
                         @memset(simd, 0);
@@ -1420,6 +1420,25 @@ fn Repair(comptime T: type) type {
             try testing.expectEqual(@as(V, @splat(0.5)), repairVector(20, V, @as(V, .{ 0, 0.5, 0.75, 1 }), grid, false));
         }
 
+        test "FP16 SIMD Repair mode 22 clamps constant neighborhood" {
+            if (comptime T != f16) return;
+
+            const V = @Vector(4, T);
+            const grid = gridcmn.Grid(V){
+                .top_left = @as(V, @splat(0.5)),
+                .top_center = @as(V, @splat(0.5)),
+                .top_right = @as(V, @splat(0.5)),
+                .center_left = @as(V, @splat(0.5)),
+                .center_center = @as(V, @splat(0.5)),
+                .center_right = @as(V, @splat(0.5)),
+                .bottom_left = @as(V, @splat(0.5)),
+                .bottom_center = @as(V, @splat(0.5)),
+                .bottom_right = @as(V, @splat(0.5)),
+            };
+
+            try testing.expectEqual(@as(V, @splat(0.5)), repairVector(22, V, @as(V, .{ 0, 0.5, 1, 0.25 }), grid, false));
+        }
+
         fn processPlane(mode: u5, chroma: bool, noalias dstp8: []u8, noalias srcp8: []const u8, noalias repairp8: []const u8, width: usize, height: usize, stride8: usize) void {
             const stride = stride8 / @sizeOf(T);
             const srcp: []const T = @ptrCast(@alignCast(srcp8));
@@ -1433,7 +1452,8 @@ fn Repair(comptime T: type) type {
                 inline 12...14 => |m| processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
                 17 => processPlaneVector(17, chroma, srcp, repairp, dstp, width, height, stride),
                 20 => processPlaneVector(20, chroma, srcp, repairp, dstp, width, height, stride),
-                inline 5...10, 15...16, 18...19, 21...24 => |m| if (comptime T == f16)
+                22 => processPlaneVector(22, chroma, srcp, repairp, dstp, width, height, stride),
+                inline 5...10, 15...16, 18...19, 21, 23...24 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
