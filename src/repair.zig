@@ -1179,7 +1179,6 @@ fn Repair(comptime T: type) type {
             };
         }
 
-
         pub fn processPlaneScalar(mode: comptime_int, noalias srcp: []const T, noalias repairp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize, chroma: bool) void {
             // Process top row with mirrored grid.
             for (0..width) |column| {
@@ -1316,7 +1315,51 @@ fn Repair(comptime T: type) type {
             }
         }
 
+        test "FP16 SIMD Repair modes 1 and 11 match scalar reference" {
+            if (comptime T != f16) return;
 
+            const vector_len = vec.getVecSize(T);
+            const widths = [_]usize{
+                if (vector_len > 1) vector_len - 1 else vector_len,
+                vector_len,
+                vector_len + 1,
+                vector_len + 3,
+            };
+            const height = 5;
+
+            for (widths) |width| {
+                const stride = width + 2;
+                const size = height * stride;
+                const srcp = try testing.allocator.alloc(T, size);
+                defer testing.allocator.free(srcp);
+                const repairp = try testing.allocator.alloc(T, size);
+                defer testing.allocator.free(repairp);
+                const scalar = try testing.allocator.alloc(T, size);
+                defer testing.allocator.free(scalar);
+                const simd = try testing.allocator.alloc(T, size);
+                defer testing.allocator.free(simd);
+
+                for (srcp, 0..) |*pixel, i| {
+                    pixel.* = @floatFromInt((i * 17) % 251);
+                }
+                for (repairp, 0..) |*pixel, i| {
+                    pixel.* = @floatFromInt((i * 29 + 3) % 251);
+                }
+
+                inline for ([_]comptime_int{ 1, 11 }) |mode| {
+                    inline for ([_]bool{ false, true }) |chroma| {
+                        @memset(scalar, 0);
+                        @memset(simd, 0);
+                        processPlaneScalar(mode, srcp, repairp, scalar, width, height, stride, chroma);
+                        processPlaneVector(mode, chroma, srcp, repairp, simd, width, height, stride);
+                        for (0..height) |row| {
+                            const row_start = row * stride;
+                            try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                        }
+                    }
+                }
+            }
+        }
 
         fn processPlane(mode: u5, chroma: bool, noalias dstp8: []u8, noalias srcp8: []const u8, noalias repairp8: []const u8, width: usize, height: usize, stride8: usize) void {
             const stride = stride8 / @sizeOf(T);
@@ -1326,19 +1369,9 @@ fn Repair(comptime T: type) type {
 
             // See note in remove_grain about the use of "double switch" optimization.
             switch (mode) {
-                inline 1...5 => |m| if (comptime T == f16)
-                    processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma)
-                else
-                    processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
-                inline 6...12 => |m| if (comptime T == f16)
-                    processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma)
-                else
-                    processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
-                inline 13...18 => |m| if (comptime T == f16)
-                    processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma)
-                else
-                    processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
-                inline 19...24 => |m| if (comptime T == f16)
+                1 => processPlaneVector(1, chroma, srcp, repairp, dstp, width, height, stride),
+                11 => processPlaneVector(11, chroma, srcp, repairp, dstp, width, height, stride),
+                inline 2...10, 12...24 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
