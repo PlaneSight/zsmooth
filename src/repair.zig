@@ -1537,6 +1537,21 @@ fn Repair(comptime T: type) type {
             try testing.expectEqual(@as(V, @splat(0.5)), repairVector(22, V, @as(V, .{ 0, 0.5, 1, 0.25 }), grid, false));
         }
 
+        fn useNativeF16Vector(comptime mode: u5) bool {
+            if (comptime T != f16) return true;
+
+            // Keep auto compatible with the existing curated modes. The other
+            // cases are explicit measurement variants, not target policy.
+            return switch (@import("config").f16_simd) {
+                .auto => switch (mode) {
+                    1...4, 11...14, 17, 20, 22 => true,
+                    else => false,
+                },
+                .scalar => false,
+                .native => true,
+            };
+        }
+
         fn processPlane(mode: u5, chroma: bool, noalias dstp8: []u8, noalias srcp8: []const u8, noalias repairp8: []const u8, width: usize, height: usize, stride8: usize) void {
             const stride = stride8 / @sizeOf(T);
             const srcp: []const T = @ptrCast(@alignCast(srcp8));
@@ -1545,16 +1560,10 @@ fn Repair(comptime T: type) type {
 
             // See note in remove_grain about the use of "double switch" optimization.
             switch (mode) {
-                inline 1...4 => |m| processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
-                11 => processPlaneVector(11, chroma, srcp, repairp, dstp, width, height, stride),
-                inline 12...14 => |m| processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
-                17 => processPlaneVector(17, chroma, srcp, repairp, dstp, width, height, stride),
-                20 => processPlaneVector(20, chroma, srcp, repairp, dstp, width, height, stride),
-                22 => processPlaneVector(22, chroma, srcp, repairp, dstp, width, height, stride),
-                inline 5...10, 15...16, 18...19, 21, 23...24 => |m| if (comptime T == f16)
-                    processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma)
+                inline 1...24 => |m| if (comptime useNativeF16Vector(m))
+                    processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride)
                 else
-                    processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
+                    processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma),
                 else => unreachable,
             }
         }

@@ -32,6 +32,8 @@ type Revision = {
   worktree: string
   pluginPath: string
   compiler: CompilerInfo
+  buildOptions: string[]
+
 }
 type Summary = {
   cases: number
@@ -83,6 +85,9 @@ const { values: cliArgs } = parseArgs({
     optimize: { type: 'string', default: 'ReleaseFast' },
     'baseline-zig': { type: 'string', default: 'zig' },
     'candidate-zig': { type: 'string', default: 'zig' },
+    'baseline-build-option': { type: 'string', multiple: true },
+    'candidate-build-option': { type: 'string', multiple: true },
+
     target: { type: 'string' },
     cpu: { type: 'string' },
     output: { type: 'string', default: 'build/benchmarks/benchmark_comparison.json' },
@@ -108,6 +113,7 @@ function optionStrings(name: string): string[] {
   return []
 }
 
+
 function printHelp(): void {
   console.log(`Compare two revisions using the existing VapourSynth benchmark runner.
 
@@ -130,6 +136,9 @@ Options:
   --perf                       Linux perf stat counters (cycles, instructions, branch-misses)
   --baseline-zig <path>        Zig executable for the baseline build (default: zig)
   --candidate-zig <path>       Zig executable for the candidate build (default: zig)
+  --baseline-build-option <arg>  Repeat to pass an additional Zig build option to baseline
+  --candidate-build-option <arg> Repeat to pass an additional Zig build option to candidate
+
   --target <triple>            Requested Zig target passed to both builds
   --cpu <name>                 Requested Zig CPU passed to both builds
   --optimize <mode>            Zig optimize mode (default: ReleaseFast)
@@ -392,10 +401,14 @@ async function main(): Promise<void> {
   const repoRoot = runCommand('git', ['rev-parse', '--show-toplevel'], invocationDir).stdout.trim()
   const baselineRequested = optionString('baseline', 'main') ?? 'main'
   const candidateRequested = optionString('candidate', 'HEAD') ?? 'HEAD'
+  const baselineBuildOptions = optionStrings('baseline-build-option')
+  const candidateBuildOptions = optionStrings('candidate-build-option')
   const baselineResolved = resolveRevision(baselineRequested, repoRoot)
   const candidateResolved = resolveRevision(candidateRequested, repoRoot)
-  if (baselineResolved.commit === candidateResolved.commit) {
-    throw new Error('Candidate and baseline resolve to the same commit')
+  const sameBuildOptions = baselineBuildOptions.length === candidateBuildOptions.length
+    && baselineBuildOptions.every((value, index) => value === candidateBuildOptions[index])
+  if (baselineResolved.commit === candidateResolved.commit && sameBuildOptions) {
+    throw new Error('Candidate and baseline resolve to the same revision and build configuration')
   }
 
   const iterations = parseInteger('iterations', '7', 3)
@@ -426,8 +439,9 @@ async function main(): Promise<void> {
       const worktree = join(tempRoot, role)
       runCommand('git', ['worktree', 'add', '--detach', worktree, resolved.commit], repoRoot)
       const requestedCompiler = role === 'baseline' ? baselineZig : candidateZig
+      const buildOptions = role === 'baseline' ? baselineBuildOptions : candidateBuildOptions
       const compiler = compilerInfo(requestedCompiler, invocationDir, worktree, target, cpu)
-      const buildArgs = ['build', `-Doptimize=${optimize}`]
+      const buildArgs = ['build', `-Doptimize=${optimize}`, ...buildOptions]
       if (target) buildArgs.push(`-Dtarget=${target}`)
       if (cpu) buildArgs.push(`-Dcpu=${cpu}`)
       runCommand(compiler.actualPath, buildArgs, worktree)
@@ -443,6 +457,8 @@ async function main(): Promise<void> {
         worktree,
         pluginPath,
         compiler,
+        buildOptions,
+
       })
     }
 
@@ -550,6 +566,10 @@ async function main(): Promise<void> {
       plugins,
       requestedTarget: target,
       requestedCpu: cpu,
+      buildOptions: {
+        baseline: baseline.buildOptions,
+        candidate: candidate.buildOptions,
+      },
       toolchains: {
         baseline: baseline.compiler,
         candidate: candidate.compiler,

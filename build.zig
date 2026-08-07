@@ -20,14 +20,23 @@ const targets = [_]std.Target.Query{
     .{ .os_tag = .windows, .cpu_arch = .x86_64, .cpu_model = std.Target.Query.CpuModel{ .explicit = &x86.cpu.znver4 }, .cpu_features_sub = x86.featureSet(&[_]x86.Feature{.sse4a, .avx512bf16}) },
 };
 
+const F16SimdMode = enum {
+    auto,
+    scalar,
+    native,
+};
+
 pub fn build(b: *std.Build) !void {
     ensureZigVersion(try .parse(zon.minimum_zig_version)) catch return;
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const optimize_float = b.option(bool, "optimize-float", "Enables 'fast-math' optimizations for floating point arithmetic, at the expense of accuracy. Defaults to enabled/true.") orelse true;
+    // Benchmark-controlled experiment: auto preserves the curated F16 dispatch.
+    const f16_simd = b.option(F16SimdMode, "f16-simd", "F16 SIMD experiment: auto, scalar, or native") orelse .auto;
     const options = b.addOptions();
     options.addOption(bool, "optimize_float", optimize_float);
+    options.addOption(F16SimdMode, "f16_simd", f16_simd);
     options.addOption(std.SemanticVersion, "version", try .parse(zon.version));
 
     const vapoursynth_dep = b.dependency("vapoursynth", .{

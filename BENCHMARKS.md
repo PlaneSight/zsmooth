@@ -39,6 +39,27 @@ Zig build identifiers to both builds. A cross target is not promised to be
 runnable by the host VapourSynth runtime; a run can build successfully and
 then fail when its plugin is loaded.
 
+For same-source configuration experiments, repeat
+`--baseline-build-option` or `--candidate-build-option`. The comparator permits
+the two roles to resolve to the same commit only when their ordered build-option
+lists differ, and records both lists in its JSON, Markdown, and metadata
+configuration. For example, compare the curated F16 dispatch with all
+native-F16 vector modes using direct-frame latency evidence:
+
+```sh
+bun benchmarks/compare_revisions.ts \
+  --baseline HEAD --candidate HEAD \
+  --baseline-build-option=-Df16-simd=scalar \
+  --candidate-build-option=-Df16-simd=native \
+  --filter RemoveGrain --filter Repair \
+  --plugin zsmooth --format f16 \
+  --iterations 7 --warmup 1
+```
+
+This is a measurement experiment, not a target policy decision; use `--full`
+when full-stream throughput is the relevant metric.
+
+
 The comparison writes the legacy comparison JSON and Markdown plus
 `benchmark_comparison.metadata.json` under `build/benchmarks/` by default.
 The metadata sidecar preserves each runner's timing mode, units, raw samples,
@@ -49,11 +70,11 @@ headers and columns, and adds `benchmark_results.json` without changing those
 files.
 
 The reproducibility matrix is the tuple of compiler executable and version,
-requested optimize mode, requested target/CPU identifiers, host OS/architecture
-and CPU, selected filter/plugin/format/argument case, frame-count scale,
-iteration count, warmup count, and timing mode. Reports record these inputs;
-hardware identity is metadata, not an inferred substitute for a requested
-target or CPU.
+requested optimize mode, per-role build-option list, requested target/CPU
+identifiers, host OS/architecture and CPU, selected
+filter/plugin/format/argument case, frame-count scale, iteration count, warmup
+count, and timing mode. Reports record these inputs; hardware identity is
+metadata, not an inferred substitute for a requested target or CPU.
 
 The command requires Bun, Zig, `vspipe`, VapourSynth's Python package,
 `vspreview`, and any external plugins referenced by the selected fixtures. It
