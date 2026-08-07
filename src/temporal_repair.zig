@@ -241,6 +241,30 @@ fn TemporalRepair(comptime T: type) type {
                 else => unreachable,
             };
         }
+        fn processPlaneVectorTemporalF16(noalias srcp: []const f16, noalias prev_repairp: []const f16, noalias curr_repairp: []const f16, noalias next_repairp: []const f16, noalias dstp: []f16, width: usize, height: usize, stride: usize) void {
+            const V16 = @Vector(vec.getVecSize(f32), f16);
+            const V32 = @Vector(@typeInfo(V16).vector.len, f32);
+            const vector_len = @typeInfo(V16).vector.len;
+
+            for (0..height) |row| {
+                const row_start = row * stride;
+                var column: usize = 0;
+                while (column + vector_len <= width) : (column += vector_len) {
+                    const offset = row_start + column;
+                    const src: V32 = vec.loadF16AsF32(V16, V32, srcp, offset);
+                    const prev_repair: V32 = vec.loadF16AsF32(V16, V32, prev_repairp, offset);
+                    const curr_repair: V32 = vec.loadF16AsF32(V16, V32, curr_repairp, offset);
+                    const next_repair: V32 = vec.loadF16AsF32(V16, V32, next_repairp, offset);
+                    const result = math.clamp(src, @min(prev_repair, curr_repair, next_repair), @max(prev_repair, curr_repair, next_repair));
+                    vec.storeF32AsF16(V16, dstp, offset, result);
+                }
+
+                for (column..width) |tail_column| {
+                    const offset = row_start + tail_column;
+                    dstp[offset] = math.clamp(srcp[offset], @min(prev_repairp[offset], curr_repairp[offset], next_repairp[offset]), @max(prev_repairp[offset], curr_repairp[offset], next_repairp[offset]));
+                }
+            }
+        }
 
         fn processPlaneVectorTemporal(mode: comptime_int, format_min: T, format_max: T, noalias srcp: []const T, noalias prev_repairp: []const T, noalias curr_repairp: []const T, noalias next_repairp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize) void {
             const V = @Vector(vec.getVecSize(T), T);
@@ -329,6 +353,52 @@ fn TemporalRepair(comptime T: type) type {
                     const row_start = row * stride;
                     try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
                 }
+            }
+        }
+        test "FP16 TemporalRepair mode 0 SIMD matches scalar reference" {
+            if (comptime T != f16) return;
+            const height = 4;
+
+            const width = vec.getVecSize(T) + 3;
+            const stride = width + 2;
+            const size = height * stride;
+            const srcp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(srcp);
+            const prev_repairp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(prev_repairp);
+            const curr_repairp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(curr_repairp);
+            const next_repairp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(next_repairp);
+            const scalar = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(scalar);
+            const simd = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(simd);
+
+            for (srcp, 0..) |*pixel, i| {
+                const value: i32 = @as(i32, @intCast((i * 3) % 17)) - 8;
+                pixel.* = @floatCast(@as(f32, @floatFromInt(value)) / 4.0);
+            }
+            for (prev_repairp, 0..) |*pixel, i| {
+                const value: i32 = @as(i32, @intCast((i * 5 + 2) % 19)) - 9;
+                pixel.* = @floatCast(@as(f32, @floatFromInt(value)) / 4.0);
+            }
+            for (curr_repairp, 0..) |*pixel, i| {
+                const value: i32 = @as(i32, @intCast((i * 7 + 3) % 21)) - 10;
+                pixel.* = @floatCast(@as(f32, @floatFromInt(value)) / 4.0);
+            }
+            for (next_repairp, 0..) |*pixel, i| {
+                const value: i32 = @as(i32, @intCast((i * 11 + 4) % 23)) - 11;
+                pixel.* = @floatCast(@as(f32, @floatFromInt(value)) / 4.0);
+            }
+
+            @memset(scalar, 0);
+            @memset(simd, 0);
+            processPlaneScalarTemporal(0, types.getTypeMinimum(T, false), types.getTypeMaximum(T, false), srcp, prev_repairp, curr_repairp, next_repairp, scalar, width, height, stride);
+            processPlaneVectorTemporalF16(srcp, prev_repairp, curr_repairp, next_repairp, simd, width, height, stride);
+            for (0..height) |row| {
+                const row_start = row * stride;
+                try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
             }
         }
 
@@ -503,7 +573,7 @@ fn TemporalRepair(comptime T: type) type {
 
             switch (mode) {
                 inline 0 => |r| if (comptime T == f16)
-                    processPlaneScalarTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride)
+                    processPlaneVectorTemporalF16(srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride)
                 else
                     processPlaneVectorTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
                 inline 1 => |r| if (comptime T == f16)
