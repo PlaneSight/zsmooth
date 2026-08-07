@@ -41,12 +41,12 @@ clip.set_output(0)
 # repair_clip = clip.std.Convolution(matrix=[1, 2, 1, 2, 4, 2, 1, 2, 1])
 repair_clip = clip # Use just the same clip for benchmarks, otherwise we're benchmarking the Repair AND Convolution
 
-# if (format not in ['f16', 'f32']):
-if (clip.format.sample_type == vs.INTEGER):
-    rg = clip.rgvs.Repair(repair_clip, mode)
-else:
-    # # Note - RGSF uses double precision for some modes, which might be part of the reason for certain differences.
-    rg = clip.rgsf.Repair(repair_clip, mode)
+if output in ['rg', 'all']:
+    if clip.format.sample_type == vs.INTEGER:
+        rg = clip.rgvs.Repair(repair_clip, mode)
+    else:
+        # RGSF uses double precision for some modes, which may affect differences.
+        rg = clip.rgsf.Repair(repair_clip, mode)
 
 zsmooth = clip.zsmooth.Repair(repair_clip, mode)
 
