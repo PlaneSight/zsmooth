@@ -217,6 +217,111 @@ fn TemporalRepair(comptime T: type) type {
                 }
             }
         }
+        fn temporalRepairVector(mode: comptime_int, format_min: T, format_max: T, src: @Vector(vec.getVecSize(T), T), prev_repair: @Vector(vec.getVecSize(T), T), curr_repair: @Vector(vec.getVecSize(T), T), next_repair: @Vector(vec.getVecSize(T), T)) @Vector(vec.getVecSize(T), T) {
+            const V = @Vector(vec.getVecSize(T), T);
+            const vmin: V = @splat(format_min);
+            const vmax: V = @splat(format_max);
+
+            return switch (mode) {
+                0 => math.clamp(src, @min(prev_repair, curr_repair, next_repair), @max(prev_repair, curr_repair, next_repair)),
+                4 => blk: {
+                    const brightest_neighbor = @max(prev_repair, next_repair);
+                    const darkest_neighbor = @min(prev_repair, next_repair);
+                    const diff_curr_darkest = subSat(curr_repair, darkest_neighbor, vmin);
+                    const darkest_plus_weighted_diff = addSat(addSat(diff_curr_darkest, diff_curr_darkest, vmax), darkest_neighbor, vmax);
+                    const diff_curr_brightest = subSat(brightest_neighbor, curr_repair, vmin);
+                    const brightest_minus_weighted_diff = subSat(brightest_neighbor, addSat(diff_curr_brightest, diff_curr_brightest, vmax), vmin);
+                    var upper = @min(darkest_plus_weighted_diff, brightest_neighbor);
+                    const lower = @max(brightest_minus_weighted_diff, darkest_neighbor);
+                    upper = if (comptime types.isFloat(T)) @max(upper, lower) else upper;
+                    const clipped = math.clamp(src, lower, upper);
+                    const lower_result = @select(T, darkest_neighbor == upper, curr_repair, clipped);
+                    break :blk @select(T, brightest_neighbor == lower, curr_repair, lower_result);
+                },
+                else => unreachable,
+            };
+        }
+
+        fn processPlaneVectorTemporal(mode: comptime_int, format_min: T, format_max: T, noalias srcp: []const T, noalias prev_repairp: []const T, noalias curr_repairp: []const T, noalias next_repairp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize) void {
+            const V = @Vector(vec.getVecSize(T), T);
+            const vector_len = @typeInfo(V).vector.len;
+
+            for (0..height) |row| {
+                const row_start = row * stride;
+                var column: usize = 0;
+                while (column + vector_len <= width) : (column += vector_len) {
+                    const offset = row_start + column;
+                    const src = vec.load(V, srcp, offset);
+                    const prev_repair = vec.load(V, prev_repairp, offset);
+                    const curr_repair = vec.load(V, curr_repairp, offset);
+                    const next_repair = vec.load(V, next_repairp, offset);
+                    vec.store(V, dstp, offset, temporalRepairVector(mode, format_min, format_max, src, prev_repair, curr_repair, next_repair));
+                }
+
+                for (column..width) |tail_column| {
+                    const offset = row_start + tail_column;
+                    dstp[offset] = temporalRepair(mode, format_min, format_max, srcp[offset], prev_repairp[offset], curr_repairp[offset], next_repairp[offset]);
+                }
+            }
+        }
+
+        test "SIMD TemporalRepair modes 0 and 4 match scalar reference" {
+            if (comptime T == f16) return;
+
+            const width = vec.getVecSize(T) + 3;
+            const height = 4;
+            const stride = width + 2;
+            const size = height * stride;
+            const srcp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(srcp);
+            const prev_repairp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(prev_repairp);
+            const curr_repairp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(curr_repairp);
+            const next_repairp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(next_repairp);
+            const scalar = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(scalar);
+            const simd = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(simd);
+
+            for (srcp, 0..) |*pixel, i| {
+                pixel.* = switch (comptime types.numberType(T)) {
+                    .int => @intCast((i * 5 + 1) % 17),
+                    .float => @floatCast(@as(f32, @floatFromInt((i * 5 + 1) % 17)) / 16.0),
+                };
+            }
+            for (prev_repairp, 0..) |*pixel, i| {
+                pixel.* = switch (comptime types.numberType(T)) {
+                    .int => @intCast((i * 7 + 2) % 17),
+                    .float => @floatCast(@as(f32, @floatFromInt((i * 7 + 2) % 17)) / 16.0),
+                };
+            }
+            for (curr_repairp, 0..) |*pixel, i| {
+                pixel.* = switch (comptime types.numberType(T)) {
+                    .int => @intCast((i * 11 + 3) % 17),
+                    .float => @floatCast(@as(f32, @floatFromInt((i * 11 + 3) % 17)) / 16.0),
+                };
+            }
+            for (next_repairp, 0..) |*pixel, i| {
+                pixel.* = switch (comptime types.numberType(T)) {
+                    .int => @intCast((i * 13 + 4) % 17),
+                    .float => @floatCast(@as(f32, @floatFromInt((i * 13 + 4) % 17)) / 16.0),
+                };
+            }
+
+            inline for ([_]comptime_int{ 0, 4 }) |mode| {
+                @memset(scalar, 0);
+                @memset(simd, 0);
+                processPlaneScalarTemporal(mode, types.getTypeMinimum(T, false), types.getTypeMaximum(T, false), srcp, prev_repairp, curr_repairp, next_repairp, scalar, width, height, stride);
+                processPlaneVectorTemporal(mode, types.getTypeMinimum(T, false), types.getTypeMaximum(T, false), srcp, prev_repairp, curr_repairp, next_repairp, simd, width, height, stride);
+                for (0..height) |row| {
+                    const row_start = row * stride;
+                    try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                }
+            }
+        }
+
 
         fn processPlaneScalarSpatialTemporal(mode: comptime_int, format_min: T, format_max: T, noalias srcp: []const T, noalias prev_repairp: []const T, noalias curr_repairp: []const T, noalias next_repairp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize) void {
             // Process top rows with mirrored grid.
@@ -277,11 +382,17 @@ fn TemporalRepair(comptime T: type) type {
             const format_min = vscmn.getFormatMinimum2(T, chroma);
 
             switch (mode) {
-                inline 0 => |r| processPlaneScalarTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
+                inline 0 => |r| if (comptime T == f16)
+                    processPlaneScalarTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride)
+                else
+                    processPlaneVectorTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
                 inline 1 => |r| processPlaneScalarSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
                 inline 2 => |r| processPlaneScalarSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
                 inline 3 => |r| processPlaneScalarSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
-                inline 4 => |r| processPlaneScalarTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
+                inline 4 => |r| if (comptime T == f16)
+                    processPlaneScalarTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride)
+                else
+                    processPlaneVectorTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
                 else => unreachable,
             }
         }
