@@ -39,23 +39,22 @@ match format:
 clip.set_output(0)
 
 
-# if (format not in ['f16', 'f32']):
-if (clip.format.sample_type == vs.INTEGER):
-    if function == 'Clense': 
-        rg = clip.rgvs.Clense()
-    elif function == 'ForwardClense':
-        rg = clip.rgvs.ForwardClense()
+if output in ['rg', 'all']:
+    if clip.format.sample_type == vs.INTEGER:
+        if function == 'Clense':
+            rg = clip.rgvs.Clense()
+        elif function == 'ForwardClense':
+            rg = clip.rgvs.ForwardClense()
+        else:
+            rg = clip.rgvs.BackwardClense()
     else:
-        rg = clip.rgvs.BackwardClense()
-
-else:
-    # # Note - RGSF uses double precision for some modes, which might be part of the reason for certain differences.
-    if function == 'Clense': 
-        rg = clip.rgsf.Clense()
-    elif function == 'ForwardClense':
-        rg = clip.rgsf.ForwardClense()
-    else:
-        rg = clip.rgsf.BackwardClense()
+        # RGSF uses double precision for some modes, which may affect differences.
+        if function == 'Clense':
+            rg = clip.rgsf.Clense()
+        elif function == 'ForwardClense':
+            rg = clip.rgsf.ForwardClense()
+        else:
+            rg = clip.rgsf.BackwardClense()
 
 if function == 'Clense': 
     zsmooth = clip.zsmooth.Clense()
