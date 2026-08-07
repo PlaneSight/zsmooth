@@ -900,6 +900,40 @@ fn RemoveGrain(comptime T: type) type {
                     const c2_result = @select(T, mindiff == d2, clamp2, c3_result);
                     break :blk @select(T, mindiff == d4, clamp4, c2_result);
                 },
+                10 => blk: {
+                    const cT = @as(SATV, grid.center_center);
+                    const d1 = math.lossyCast(SATV, @abs(cT - @as(SATV, grid.top_left)));
+                    const d2 = math.lossyCast(SATV, @abs(cT - @as(SATV, grid.top_center)));
+                    const d3 = math.lossyCast(SATV, @abs(cT - @as(SATV, grid.top_right)));
+                    const d4 = math.lossyCast(SATV, @abs(cT - @as(SATV, grid.center_left)));
+                    const d5 = math.lossyCast(SATV, @abs(cT - @as(SATV, grid.center_right)));
+                    const d6 = math.lossyCast(SATV, @abs(cT - @as(SATV, grid.bottom_left)));
+                    const d7 = math.lossyCast(SATV, @abs(cT - @as(SATV, grid.bottom_center)));
+                    const d8 = math.lossyCast(SATV, @abs(cT - @as(SATV, grid.bottom_right)));
+                    const mindiff = @min(d1, d2, d3, d4, d5, d6, d7, d8);
+
+                    const d5_result = @select(T, mindiff == d5, grid.center_right, grid.center_left);
+                    const d1_result = @select(T, mindiff == d1, grid.top_left, d5_result);
+                    const d3_result = @select(T, mindiff == d3, grid.top_right, d1_result);
+                    const d2_result = @select(T, mindiff == d2, grid.top_center, d3_result);
+                    const d6_result = @select(T, mindiff == d6, grid.bottom_left, d2_result);
+                    const d8_result = @select(T, mindiff == d8, grid.bottom_right, d6_result);
+                    break :blk @select(T, mindiff == d7, grid.bottom_center, d8_result);
+                },
+                11, 12 => blk: {
+                    const two: UATV = @splat(2);
+                    const four: UATV = @splat(4);
+                    const eight: UATV = @splat(8);
+                    const sixteen: UATV = @splat(16);
+                    const sum = four * @as(UATV, grid.center_center) +
+                        two * (@as(UATV, grid.top_center) + @as(UATV, grid.center_left) + @as(UATV, grid.center_right) + @as(UATV, grid.bottom_center)) +
+                        @as(UATV, grid.top_left) + @as(UATV, grid.top_right) +
+                        @as(UATV, grid.bottom_left) + @as(UATV, grid.bottom_right);
+                    break :blk if (types.isFloat(T))
+                        sum / sixteen
+                    else
+                        math.lossyCast(V, (sum + eight) / sixteen);
+                },
                 13, 14 => blk: {
                     const d1 = @abs(@as(SATV, grid.top_left) - @as(SATV, grid.bottom_right));
                     const d2 = @abs(@as(SATV, grid.top_center) - @as(SATV, grid.bottom_center));
@@ -1077,7 +1111,7 @@ fn RemoveGrain(comptime T: type) type {
                 }
             }
 
-            inline for ([_]comptime_int{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 17 }) |mode| {
+            inline for ([_]comptime_int{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 17 }) |mode| {
                 @memset(scalar, 0);
                 @memset(simd, 0);
                 processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
@@ -1099,7 +1133,7 @@ fn RemoveGrain(comptime T: type) type {
                 }
             }
         }
-        test "SIMD modes 5-9 preserve tie order" {
+        test "SIMD modes 5-12 preserve tie order" {
             if (comptime T == f16) return;
 
             const V = @Vector(4, T);
@@ -1120,6 +1154,10 @@ fn RemoveGrain(comptime T: type) type {
             try testing.expectEqual(@as(V, .{ 6, 6, 4, 4 }), removegrainVector(7, V, grid, false));
             try testing.expectEqual(@as(V, .{ 6, 7, 7, 7 }), removegrainVector(8, V, grid, false));
             try testing.expectEqual(@as(V, .{ 6, 7, 7, 7 }), removegrainVector(9, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 4, 4, 4, 4 }), removegrainVector(10, V, grid, false));
+            const weighted_expected: T = if (types.isFloat(T)) 5.75 else 6;
+            try testing.expectEqual(@as(V, @splat(weighted_expected)), removegrainVector(11, V, grid, false));
+            try testing.expectEqual(@as(V, @splat(weighted_expected)), removegrainVector(12, V, grid, false));
         }
 
 
@@ -1129,7 +1167,7 @@ fn RemoveGrain(comptime T: type) type {
             const dstp: []T = @ptrCast(@alignCast(dstp8));
 
             switch (mode) {
-                inline 1...9, 17 => |m| if (comptime T == f16)
+                inline 1...12, 17 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
@@ -1137,7 +1175,7 @@ fn RemoveGrain(comptime T: type) type {
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVectorInterlaced(m, srcp, dstp, width, height, stride, chroma),
-                inline 10...12, 18...24 => |m| processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
+                inline 18...24 => |m| processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
                 else => unreachable,
             }
         }
