@@ -10,7 +10,6 @@ const vscmn = @import("common/vapoursynth.zig");
 const sort = @import("common/sorting_networks.zig");
 const math = @import("common/math.zig");
 const vec = @import("common/vector.zig");
-const f16cmn = @import("common/f16.zig");
 const float_mode: std.builtin.FloatMode = if (@import("config").optimize_float) .optimized else .strict;
 
 const vs = vapoursynth.vapoursynth4;
@@ -69,14 +68,12 @@ fn Clense(comptime T: type) type {
             @setFloatMode(float_mode);
 
             if (comptime T == f16) {
+                // Native F16 median remains opt-in for measurement: on the
+                // profiled fullfp16 target, widened F32 was faster.
                 return switch (@import("config").f16_simd) {
                     .scalar => clenseScalar(dstp, srcp, prev, next, width, height, stride),
                     .native => clenseF16Native(dstp, srcp, prev, next, width, height, stride),
-                    .widened => clenseF16(dstp, srcp, prev, next, width, height, stride),
-                    .auto => if (f16cmn.target_has_native_fp16_arithmetic)
-                        clenseF16Native(dstp, srcp, prev, next, width, height, stride)
-                    else
-                        clenseF16(dstp, srcp, prev, next, width, height, stride),
+                    .auto, .widened => clenseF16(dstp, srcp, prev, next, width, height, stride),
                 };
             }
 
