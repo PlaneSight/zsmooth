@@ -43,15 +43,37 @@ The following work has already landed:
   RemoveGrain includes interlaced modes 13--16.
 - The benchmark runner supports isolated revision comparison and defaults to
   fast, direct-frame samples for local iteration.
-- Clense, VerticalCleaner, and TemporalRepair mode 0 contain FP16-storage to
-  FP32-vector-compute paths. RemoveGrain and Repair have selected native-FP16
-  vector modes; their remaining FP16 modes still use scalar paths.
+- Clense, TemporalRepair mode 0, and VerticalCleaner mode 2 retain their
+  FP16-storage to FP32-vector-compute paths. VerticalCleaner mode 1 now uses
+  an exact native-FP16 median vector path only when the compile target
+  advertises `fullfp16`; other targets retain its widened path. RemoveGrain
+  and Repair have selected native-FP16 vector modes.
 - Several vectorized filters have safer non-overlapping tail handling, while
   CNR4 has hoisted invariant vector loads and unrolled temporal loops.
 
-This baseline establishes implementation coverage, not a performance claim.
-No target/compiler comparison should be inferred until the measurement
-milestone produces its reports.
+This baseline establishes implementation coverage. The current target-specific
+evidence is deliberately narrow: on an Apple M5 / Zig 0.16.0 host,
+three-sample direct-frame tests measured native RemoveGrain at 2.430x of
+scalar across ten F16 cases, while a seven-sample comparison of `6618c60` and
+`b5eee37` measured VerticalCleaner F16 mode 1 at 1.702x of its prior
+F32-widened vector path (1.285x over the two VerticalCleaner cases). These
+reports are local latency signals, not a cross-target compiler policy.
+
+## Current decisions and blockers
+
+- No rolling-grid-loader change is justified yet. The captured release artifact
+  confirms vector FP16 arithmetic in the plugin, but it is not a focused
+  before/after counter or disassembly experiment for RemoveGrain addressing.
+  The existing explicit row/vector loops remain clearer and are retained.
+- Clense's direct-frame FP16 comparison is blocked on this host because its
+  fixture constructs the unavailable external `rgsf.Clense` reference even
+  when only the Zsmooth output is selected. This is an environment limitation,
+  not a Zsmooth performance result.
+- The fat-plugin experiment is deferred. Separate Haswell, Zen 4, and AArch64
+  artifacts remain the supported release model until hardware measurements
+  demonstrate that coarse dispatch improves its binary-size and maintenance
+  tradeoff.
+- No x86 or non-Apple-AArch64 policy follows from the local measurements.
 
 ## Milestone 1: Reproducible measurement baseline
 

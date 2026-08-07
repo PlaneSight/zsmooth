@@ -1,5 +1,12 @@
 # Changelog
 
+
+## Unreleased
+* VerticalCleaner: Use a native-F16 SIMD median for mode 1 only on AArch64
+  targets advertising `fullfp16`; preserve the F32-widened path elsewhere.
+  On an Apple M5 with Zig 0.16.0, a seven-sample direct-frame comparison
+  measured mode 1 at 1.702x of the prior widened implementation.
+
 ## 0.20.0
 * RemoveGrain: Fix bug in parsing of `mode` param. Previously, specifying different modes for planes 1 and 2 were not respected.
 * build: Update znver4 builds to disable use of AVX512BF16, per Myrsloik's guidance.
