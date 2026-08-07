@@ -39,7 +39,8 @@ match format:
 
 clip.set_output(0)
 
-std = clip.std.Median()
+if output in ['std', 'all']:
+    std = clip.std.Median()
 
 zsmooth = clip.zsmooth.Median(int(radius))
 

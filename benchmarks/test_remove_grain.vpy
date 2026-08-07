@@ -37,20 +37,22 @@ match format:
 
 clip.set_output(0)
 
-if (clip.format.sample_type == vs.INTEGER):
-    rg = clip.rgvs.RemoveGrain(mode)
-else:
-    # Note - RGSF uses double precision for some modes, which might be part of the reason for certain differences.
-    rg = clip.rgsf.RemoveGrain(mode)
+if output in ['rg', 'all']:
+    if clip.format.sample_type == vs.INTEGER:
+        rg = clip.rgvs.RemoveGrain(mode)
+    else:
+        # Note - RGSF uses double precision for some modes, which might be part of the reason for certain differences.
+        rg = clip.rgsf.RemoveGrain(mode)
 
-if mode == "4":
-    std = clip.std.Median()
-if mode in ["11", "12"]:
-    std = clip.std.Convolution(matrix=[1, 2, 1, 2, 4, 2, 1, 2, 1])
-if mode == "19":
-    std = clip.std.Convolution(matrix=[1, 1, 1, 1, 0, 1, 1, 1, 1])
-if mode == "20":
-    std = clip.std.Convolution(matrix=[1, 1, 1, 1, 1, 1, 1, 1, 1])
+if output in ['std', 'all']:
+    if mode == "4":
+        std = clip.std.Median()
+    if mode in ["11", "12"]:
+        std = clip.std.Convolution(matrix=[1, 2, 1, 2, 4, 2, 1, 2, 1])
+    if mode == "19":
+        std = clip.std.Convolution(matrix=[1, 1, 1, 1, 0, 1, 1, 1, 1])
+    if mode == "20":
+        std = clip.std.Convolution(matrix=[1, 1, 1, 1, 1, 1, 1, 1, 1])
 
 zsmooth = clip.zsmooth.RemoveGrain(mode)
 
