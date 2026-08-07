@@ -5,6 +5,7 @@ const testing = @import("std").testing;
 
 const types = @import("common/type.zig");
 const math = @import("common/math.zig");
+const vec = @import("common/vector.zig");
 const vscmn = @import("common/vapoursynth.zig");
 const sort = @import("common/sorting_networks.zig");
 const gridcmn = @import("common/grid.zig");
@@ -798,6 +799,39 @@ fn Repair(comptime T: type) type {
                 else => unreachable,
             };
         }
+        fn repairVector(mode: comptime_int, comptime V: type, src: V, grid: gridcmn.Grid(V), chroma: bool) V {
+            _ = chroma;
+            const SATV = types.SignedArithmeticType(V);
+            return switch (mode) {
+                1 => math.clamp(src, grid.minWithCenter(), grid.maxWithCenter()),
+                2, 3, 4 => blk: {
+                    var neighbours = grid.toArrayWithCenter();
+                    sort.sort(V, &neighbours);
+                    const lower = if (mode == 2) 1 else if (mode == 3) 2 else 3;
+                    const upper = 8 - lower;
+                    break :blk math.clamp(src, neighbours[lower], neighbours[upper]);
+                },
+                5 => blk: {
+                    const sorted = grid.minMaxOppositesWithCenter();
+                    const srcT = @as(SATV, src);
+                    const clamp1 = math.clamp(src, sorted.min1, sorted.max1);
+                    const clamp2 = math.clamp(src, sorted.min2, sorted.max2);
+                    const clamp3 = math.clamp(src, sorted.min3, sorted.max3);
+                    const clamp4 = math.clamp(src, sorted.min4, sorted.max4);
+                    const c1 = @abs(srcT - @as(SATV, clamp1));
+                    const c2 = @abs(srcT - @as(SATV, clamp2));
+                    const c3 = @abs(srcT - @as(SATV, clamp3));
+                    const c4 = @abs(srcT - @as(SATV, clamp4));
+                    const mindiff = @min(c1, c2, c3, c4);
+
+                    const c3_result = @select(T, mindiff == c3, clamp3, clamp1);
+                    const c2_result = @select(T, mindiff == c2, clamp2, c3_result);
+                    break :blk @select(T, mindiff == c4, clamp4, c2_result);
+                },
+                else => unreachable,
+            };
+        }
+
 
         pub fn processPlaneScalar(mode: comptime_int, noalias srcp: []const T, noalias repairp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize, chroma: bool) void {
             // Process top row with mirrored grid.
@@ -839,6 +873,91 @@ fn Repair(comptime T: type) type {
                 dstp[((height - 1) * stride) + column] = repair(mode, src, grid, chroma);
             }
         }
+        fn processPlaneVector(mode: comptime_int, chroma: bool, noalias srcp: []const T, noalias repairp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize) void {
+            const V = @Vector(vec.getVecSize(T), T);
+            const vector_len = @typeInfo(V).vector.len;
+
+            for (0..width) |column| {
+                const src = srcp[column];
+                const grid = Grid.initFromCenterMirrored(T, 0, column, width, height, repairp, stride);
+                dstp[column] = repair(mode, src, grid, chroma);
+            }
+
+            for (1..height - 1) |row| {
+                const row_start = row * stride;
+                const src_first = srcp[row_start];
+                const grid_first = Grid.initFromCenterMirrored(T, row, 0, width, height, repairp, stride);
+                dstp[row_start] = repair(mode, src_first, grid_first, chroma);
+
+                var column: usize = 1;
+                while (column + vector_len <= width - 1) : (column += vector_len) {
+                    const top_left = ((row - 1) * stride) + column - 1;
+                    const grid = gridcmn.Grid(V).init(T, repairp[top_left..], stride);
+                    const src = vec.load(V, srcp, row_start + column);
+                    vec.store(V, dstp, row_start + column, repairVector(mode, V, src, grid, chroma));
+                }
+
+                for (column..width - 1) |tail_column| {
+                    const top_left = ((row - 1) * stride) + tail_column - 1;
+                    const grid = Grid.init(T, repairp[top_left..], stride);
+                    dstp[row_start + tail_column] = repair(mode, srcp[row_start + tail_column], grid, chroma);
+                }
+
+                const last_column = width - 1;
+                const src_last = srcp[row_start + last_column];
+                const grid_last = Grid.initFromCenterMirrored(T, row, last_column, width, height, repairp, stride);
+                dstp[row_start + last_column] = repair(mode, src_last, grid_last, chroma);
+            }
+
+            for (0..width) |column| {
+                const offset = ((height - 1) * stride) + column;
+                const src = srcp[offset];
+                const grid = Grid.initFromCenterMirrored(T, height - 1, column, width, height, repairp, stride);
+                dstp[offset] = repair(mode, src, grid, chroma);
+            }
+        }
+        test "SIMD Repair modes 1-5 match scalar reference" {
+            if (comptime T == f16) return;
+
+            const width = vec.getVecSize(T) + 3;
+            const height = 5;
+            const stride = width + 2;
+            const size = height * stride;
+            const srcp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(srcp);
+            const repairp = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(repairp);
+            const scalar = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(scalar);
+            const simd = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(simd);
+
+            for (srcp, 0..) |*pixel, i| {
+                switch (comptime types.numberType(T)) {
+                    .int => pixel.* = @intCast((i * 17) % 251),
+                    .float => pixel.* = @floatFromInt((i * 17) % 251),
+                }
+            }
+            for (repairp, 0..) |*pixel, i| {
+                switch (comptime types.numberType(T)) {
+                    .int => pixel.* = @intCast((i * 29 + 3) % 251),
+                    .float => pixel.* = @floatFromInt((i * 29 + 3) % 251),
+                }
+            }
+
+            inline for ([_]comptime_int{ 1, 2, 3, 4, 5 }) |mode| {
+                @memset(scalar, 0);
+                @memset(simd, 0);
+                processPlaneScalar(mode, srcp, repairp, scalar, width, height, stride, false);
+                processPlaneVector(mode, false, srcp, repairp, simd, width, height, stride);
+                for (0..height) |row| {
+                    const row_start = row * stride;
+                    try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                }
+            }
+        }
+
+
 
         fn processPlane(mode: u5, chroma: bool, noalias dstp8: []u8, noalias srcp8: []const u8, noalias repairp8: []const u8, width: usize, height: usize, stride8: usize) void {
             const stride = stride8 / @sizeOf(T);
@@ -848,7 +967,11 @@ fn Repair(comptime T: type) type {
 
             // See note in remove_grain about the use of "double switch" optimization.
             switch (mode) {
-                inline 1...24 => |m| processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma),
+                inline 1...5 => |m| if (comptime T == f16)
+                    processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma)
+                else
+                    processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
+                inline 6...24 => |m| processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma),
                 else => unreachable,
             }
         }
