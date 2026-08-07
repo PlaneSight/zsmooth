@@ -1,79 +1,125 @@
 # Benchmarks
-All benchmarks are run single-threaded (`core.num_threads = 1`) with a max cache size of 1GB (`core.max_cache_size = 1024`) 
-to provided the greatest stability of FPS numbers between runs. 
 
-So while the benchmarks show fast results, you'll see even faster by using Zsmooth when using a fully threaded VapourSynth script.
+The canonical benchmark workflow is generated from `benchmarks/catalog.py` and
+implemented by `benchmarks/harness.py`. Run the commands below from the
+repository root. The harness builds deterministic BlankClip inputs and writes
+JSON plans and results; it does not use the historical hand-written benchmark
+matrix.
 
-## Comparing revisions
+## Canonical harness workflow
 
-`benchmarks/compare_revisions.ts` builds two detached revisions with the same
-`ReleaseFast` settings, runs the existing benchmark runner in isolated
-directories, and compares its CSV results. The default baseline is `main`;
-`master` is used automatically when no local `main` ref exists.
-
-Run from the repository root:
+Discover the zsmooth functions exposed by a built plugin:
 
 ```sh
-bun benchmarks/compare_revisions.ts \
-  --baseline main \
-  --candidate HEAD \
-  --filter RemoveGrain \
-  --filter VerticalCleaner \
-  --plugin zsmooth \
-  --format u8 \
-  --format u16 \
-  --format f32 \
-  --format f16
+python -m benchmarks.harness discover \
+  --plugin-path PATH
 ```
 
-Repeat `--filter`, `--plugin`, and `--format` to select a subset. Omitting
-those options runs the complete matrix. Use `--frame-count-scale` to shorten
-fixture workloads, `--iterations` (minimum 3) and `--warmup` to control
-sampling, and `--keep-worktrees` to retain temporary build trees for
-inspection. JSON and Markdown reports are written under `build/benchmarks/`,
-which is ignored by Git.
+`PATH` is normally a revision's `zig-out/lib` directory. Discovery prints
+canonical JSON to standard output and verifies that the VapourSynth Python
+runtime can load the plugin.
 
-The RemoveGrain matrix includes modes 13–16 and derives matching F16 cases
-from the Zsmooth F32 cases. The fixtures only construct reference-plugin
-graphs when `rg`, `std`, or `all` output is selected, so Zsmooth-only runs do
-not require those optional comparison plugins.
-
-The command requires Bun, Zig, `vspipe`, VapourSynth's Python package,
-`vspreview`, and any external plugins referenced by the selected fixtures. It
-prepends each revision's `zig-out/lib` to
-`VAPOURSYNTH_EXTRA_PLUGIN_PATH`, while preserving any existing search path.
-
-## Fast direct-frame mode
-
-For a quick relative signal, pass `--fast` to run the selected fixture in a
-fresh Python process and time one selected output's `get_frame(frame)` request
-per sample. Each sample rebuilds the fixture graph and clears the VapourSynth
-cache, while warmups and measured iterations retain the normal runner policy:
+Create a deterministic plan:
 
 ```sh
-VAPOURSYNTH_EXTRA_PLUGIN_PATH="$PWD/zig-out/lib" \
-bun benchmarks/run_benchmarks.ts \
-  --fast \
-  --fast-python "${VAPOURSYNTH_PYTHON:-python3}" \
-  --filter RemoveGrain \
-  --plugin zsmooth \
-  --format f16 \
+python -m benchmarks.harness plan \
+  --output PATH \
+  --plugin-path PATH \
+  [--function NAME] \
+  [--format FORMAT]
+```
+
+`--function` and `--format` may each be repeated. Omitting `--function`
+selects the complete generated catalog. Omitting `--format` selects every
+format supported by each selected function. Formats may be restricted to
+`u8`, `u16`, `f16`, or `f32`; unsupported function-format pairs are omitted,
+and the command fails only when no selected case supports the requested
+formats. The plan contains canonical case IDs and a `plan_id`, and its sorted,
+canonical JSON serialization is deterministic for the same catalog, functions,
+and formats.
+
+Run a plan:
+
+```sh
+python -m benchmarks.harness run \
+  --plugin-path PATH \
+  --plan PATH \
+  --output PATH \
+  --timing direct \
+  --iterations N \
+  --warmup N
+```
+
+`--timing direct|stream` accepts either timing mode. Both `--iterations` and
+`--warmup` must be positive integers. Direct timing clears the VapourSynth
+cache, builds one graph, and measures one middle-frame `get_frame` request.
+Stream timing clears the cache, builds one graph, measures sequential requests
+for the plan's frame window, and reports the elapsed time per frame. Graph
+construction, cleanup, and cache clearing are outside both timers. Results
+contain the plan ID, timing configuration, environment metadata, per-case
+samples, millisecond statistics, and median FPS; key ordering and schema are
+stable, while measured values naturally vary between runs. Writing `--output`
+to a path under the repository preserves the plan or result JSON as a durable
+raw artifact.
+
+## Measuring revisions
+
+`benchmarks/benchmark.py` builds each requested revision in a detached
+worktree with `zig build -Doptimize=ReleaseFast`, then invokes the canonical
+harness against that worktree's `zig-out/lib`. Measure a complete catalog
+reference:
+
+```sh
+python benchmarks/benchmark.py reference HEAD \
+  --timing direct \
   --iterations 7 \
-  --warmup 1
+  --warmup 1 \
+  --output benchmarks/references/reference.json
 ```
 
-`--fast-frame` selects the requested frame (default `0`). Fast-mode results
-are single-frame latency converted to an FPS-shaped value; they are not
-full-stream `vspipe` throughput and should not be compared numerically with
-the normal runner's FPS. `benchmarks/compare_revisions.ts` accepts the same
-`--fast`, `--fast-python`, and `--fast-frame` options and applies them to both
-revisions.
+Compare a candidate with an explicit baseline:
 
-The fast helper supplies a fallback for the fixtures' optional `vspreview`
-preview check. The selected Python runtime must still provide VapourSynth and
-any other modules imported by the fixture, and the revision's `zig-out/lib`
-must be available through `VAPOURSYNTH_EXTRA_PLUGIN_PATH`.
+```sh
+python benchmarks/benchmark.py compare HEAD main \
+  --timing direct \
+  --iterations 7 \
+  --warmup 1 \
+  --format f32 \
+  --format f16 \
+  --output benchmarks/results/HEAD.json
+```
 
+The positional arguments are `CANDIDATE [BASELINE]`; `--candidate` and
+`--baseline` are equivalent named options. The candidate defaults to `HEAD`.
+When no baseline is supplied, the repository's default branch is selected
+(`origin/HEAD`, `main`, or `master`, with local fallbacks). Comparison computes
+the Git merge-base of the resolved revisions, maps candidate changes since
+that merge-base to affected zsmooth functions, and benchmarks only common
+functions. Global build/source changes select the complete catalog; added and
+removed functions are reported without attempting an invalid comparison.
+Repeated `--format FORMAT` options restrict the selected cases to explicit
+formats. The reference command always measures the complete catalog.
+
+Both revision commands write a durable report JSON (by default under
+`benchmarks/references/<environment-id>/<commit>.json` or
+`benchmarks/results/<candidate-commit>.json`). Reports record resolved
+revisions, merge-base and changed-file/function selection, build settings,
+timing, environment identity, plan ID, comparison rows, and paths to the raw
+plan/results. Durable raw copies remain beside the report; temporary detached
+worktrees and intermediate files are removed after a run by default. Pass
+`--keep-worktrees` to retain the temporary root and its intermediate JSON for
+archival or inspection.
+
+The workflow requires Zig for the `ReleaseFast` builds and a Python runtime
+with the VapourSynth package importable. Use `--python PATH` (or
+`VAPOURSYNTH_PYTHON`) when the VapourSynth runtime is not the `python`
+executable being used. The harness sets the plugin search path from
+`--plugin-path`; no separate runner, stream tool, or hand-written case files
+are required.
+
+Historical result tables below are retained as archival measurements. They are
+not regenerated by the canonical workflow and their recorded values are left
+unchanged.
 
 ## Table of Contents
 * [0.17 - Zig 0.15.2 - ARM NEON](#017---zig-0152---arm-neon-aarch64-macos)
