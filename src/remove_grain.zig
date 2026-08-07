@@ -1217,13 +1217,15 @@ fn RemoveGrain(comptime T: type) type {
                         pixel.* = @floatFromInt((i * 37) % 251);
                     }
 
-                    @memset(scalar, 0);
-                    @memset(simd, 0);
-                    processPlaneScalar(1, srcp, scalar, width, height, stride, false);
-                    processPlaneVector(1, srcp, simd, width, height, stride, false);
-                    for (0..height) |row| {
-                        const row_start = row * stride;
-                        try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                    inline for ([_]comptime_int{ 1, 2, 3, 4 }) |mode| {
+                        @memset(scalar, 0);
+                        @memset(simd, 0);
+                        processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
+                        processPlaneVector(mode, srcp, simd, width, height, stride, false);
+                        for (0..height) |row| {
+                            const row_start = row * stride;
+                            try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                        }
                     }
                 }
                 return;
@@ -1303,14 +1305,35 @@ fn RemoveGrain(comptime T: type) type {
             try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(24, V, grid, false));
         }
 
+        test "FP16 SIMD modes 2-4 preserve tie order" {
+            if (comptime T != f16) return;
+
+            const V = @Vector(4, T);
+            const grid = gridcmn.Grid(V){
+                .top_left = @as(V, .{ 0, 0, 0, 0 }),
+                .top_center = @as(V, .{ 6, 6, 7, 7 }),
+                .top_right = @as(V, .{ 0, 0, 0, 7 }),
+                .center_left = @as(V, .{ 6, 7, 7, 7 }),
+                .center_center = @as(V, .{ 5, 5, 5, 5 }),
+                .center_right = @as(V, .{ 10, 10, 10, 10 }),
+                .bottom_left = @as(V, .{ 4, 4, 4, 10 }),
+                .bottom_center = @as(V, .{ 10, 10, 10, 10 }),
+                .bottom_right = @as(V, .{ 4, 4, 4, 4 }),
+            };
+
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(2, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 7 }), removegrainVector(3, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 7 }), removegrainVector(4, V, grid, false));
+        }
+
         fn processPlane(mode: u5, noalias srcp8: []const u8, noalias dstp8: []u8, width: usize, height: usize, stride8: usize, chroma: bool) void {
             const stride = stride8 / @sizeOf(T);
             const srcp: []const T = @ptrCast(@alignCast(srcp8));
             const dstp: []T = @ptrCast(@alignCast(dstp8));
 
             switch (mode) {
-                1 => processPlaneVector(1, srcp, dstp, width, height, stride, chroma),
-                inline 2...12, 17 => |m| if (comptime T == f16)
+                inline 1...4 => |m| processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
+                inline 5...12, 17 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
