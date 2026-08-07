@@ -793,6 +793,23 @@ fn RemoveGrain(comptime T: type) type {
                     const upper = 7 - lower;
                     break :blk std.math.clamp(grid.center_center, neighbours[lower], neighbours[upper]);
                 },
+                5 => blk: {
+                    const sorted = grid.minMaxOppositesWithoutCenter();
+                    const cT = @as(SATV, grid.center_center);
+                    const clamp1 = math.clamp(grid.center_center, sorted.min1, sorted.max1);
+                    const clamp2 = math.clamp(grid.center_center, sorted.min2, sorted.max2);
+                    const clamp3 = math.clamp(grid.center_center, sorted.min3, sorted.max3);
+                    const clamp4 = math.clamp(grid.center_center, sorted.min4, sorted.max4);
+                    const c1 = @abs(cT - @as(SATV, clamp1));
+                    const c2 = @abs(cT - @as(SATV, clamp2));
+                    const c3 = @abs(cT - @as(SATV, clamp3));
+                    const c4 = @abs(cT - @as(SATV, clamp4));
+                    const mindiff = @min(c1, c2, c3, c4);
+
+                    const c3_result = @select(T, mindiff == c3, clamp3, clamp1);
+                    const c2_result = @select(T, mindiff == c2, clamp2, c3_result);
+                    break :blk @select(T, mindiff == c4, clamp4, c2_result);
+                },
                 13, 14 => blk: {
                     const d1 = @abs(@as(SATV, grid.top_left) - @as(SATV, grid.bottom_right));
                     const d2 = @abs(@as(SATV, grid.top_center) - @as(SATV, grid.bottom_center));
@@ -970,7 +987,7 @@ fn RemoveGrain(comptime T: type) type {
                 }
             }
 
-            inline for ([_]comptime_int{ 1, 2, 3, 4, 17 }) |mode| {
+            inline for ([_]comptime_int{ 1, 2, 3, 4, 5, 17 }) |mode| {
                 @memset(scalar, 0);
                 @memset(simd, 0);
                 processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
@@ -992,6 +1009,25 @@ fn RemoveGrain(comptime T: type) type {
                 }
             }
         }
+        test "SIMD mode 5 preserves tie order" {
+            if (comptime T == f16) return;
+
+            const V = @Vector(4, T);
+            const grid = gridcmn.Grid(V){
+                .top_left = @as(V, .{ 0, 0, 0, 0 }),
+                .top_center = @as(V, .{ 6, 6, 7, 7 }),
+                .top_right = @as(V, .{ 0, 0, 0, 7 }),
+                .center_left = @as(V, .{ 6, 7, 7, 7 }),
+                .center_center = @as(V, .{ 5, 5, 5, 5 }),
+                .center_right = @as(V, .{ 10, 10, 10, 10 }),
+                .bottom_left = @as(V, .{ 4, 4, 4, 10 }),
+                .bottom_center = @as(V, .{ 10, 10, 10, 10 }),
+                .bottom_right = @as(V, .{ 4, 4, 4, 4 }),
+            };
+
+            try testing.expectEqual(@as(V, .{ 6, 6, 4, 4 }), removegrainVector(5, V, grid));
+        }
+
 
         fn processPlane(mode: u5, noalias srcp8: []const u8, noalias dstp8: []u8, width: usize, height: usize, stride8: usize, chroma: bool) void {
             const stride = stride8 / @sizeOf(T);
@@ -999,7 +1035,7 @@ fn RemoveGrain(comptime T: type) type {
             const dstp: []T = @ptrCast(@alignCast(dstp8));
 
             switch (mode) {
-                inline 1...4, 17 => |m| if (comptime T == f16)
+                inline 1...5, 17 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
@@ -1007,7 +1043,7 @@ fn RemoveGrain(comptime T: type) type {
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVectorInterlaced(m, srcp, dstp, width, height, stride, chroma),
-                inline 5...12, 18...24 => |m| processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
+                inline 6...12, 18...24 => |m| processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
                 else => unreachable,
             }
         }
