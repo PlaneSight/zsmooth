@@ -43,6 +43,38 @@ The command requires Bun, Zig, `vspipe`, VapourSynth's Python package,
 prepends each revision's `zig-out/lib` to
 `VAPOURSYNTH_EXTRA_PLUGIN_PATH`, while preserving any existing search path.
 
+## Fast direct-frame mode
+
+For a quick relative signal, pass `--fast` to run the selected fixture in a
+fresh Python process and time one selected output's `get_frame(frame)` request
+per sample. Each sample rebuilds the fixture graph and clears the VapourSynth
+cache, while warmups and measured iterations retain the normal runner policy:
+
+```sh
+VAPOURSYNTH_EXTRA_PLUGIN_PATH="$PWD/zig-out/lib" \
+bun benchmarks/run_benchmarks.ts \
+  --fast \
+  --fast-python "${VAPOURSYNTH_PYTHON:-python3}" \
+  --filter RemoveGrain \
+  --plugin zsmooth \
+  --format f16 \
+  --iterations 7 \
+  --warmup 1
+```
+
+`--fast-frame` selects the requested frame (default `0`). Fast-mode results
+are single-frame latency converted to an FPS-shaped value; they are not
+full-stream `vspipe` throughput and should not be compared numerically with
+the normal runner's FPS. `benchmarks/compare_revisions.ts` accepts the same
+`--fast`, `--fast-python`, and `--fast-frame` options and applies them to both
+revisions.
+
+The fast helper supplies a fallback for the fixtures' optional `vspreview`
+preview check. The selected Python runtime must still provide VapourSynth and
+any other modules imported by the fixture, and the revision's `zig-out/lib`
+must be available through `VAPOURSYNTH_EXTRA_PLUGIN_PATH`.
+
+
 ## Table of Contents
 * [0.17 - Zig 0.15.2 - ARM NEON](#017---zig-0152---arm-neon-aarch64-macos)
 * [0.13 - Zig 0.15.2 - ARM NEON](#013---zig-0152---arm-neon-aarch64-macos)

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { exit } from 'node:process'
+import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 
 const { values: cliArgs } = parseArgs({
@@ -31,13 +32,29 @@ const { values: cliArgs } = parseArgs({
     "exclude-plugin": {
       type: "string",
       multiple: true
-    }
-  }
+    },
+    fast: {
+      type: "boolean",
+      default: false,
+    },
+    "fast-python": {
+      type: "string",
+    },
+    "fast-frame": {
+      type: "string",
+      default: "0",
+    },
+  },
 })
 
 const DEFAULT_NUM_FRAMES = Math.round(2000 * Number.parseFloat(cliArgs['frame-count-scale']))
 const ITERATIONS = Number.parseInt(cliArgs.iterations, 10)
 const WARMUP_ITERATIONS = Number.parseInt(cliArgs.warmup, 10)
+const FAST_MODE = cliArgs.fast === true
+const FAST_PYTHON = typeof cliArgs['fast-python'] === 'string'
+  ? cliArgs['fast-python']
+  : process.env.VAPOURSYNTH_PYTHON ?? 'python3'
+const FAST_FRAME = Number.parseInt(cliArgs['fast-frame'] as string, 10)
 
 if (!Number.isSafeInteger(ITERATIONS) || ITERATIONS < 3) {
   throw new Error('--iterations must be an integer of at least 3')
@@ -45,6 +62,9 @@ if (!Number.isSafeInteger(ITERATIONS) || ITERATIONS < 3) {
 
 if (!Number.isSafeInteger(WARMUP_ITERATIONS) || WARMUP_ITERATIONS < 0) {
   throw new Error('--warmup must be a non-negative integer')
+}
+if (FAST_MODE && (!Number.isSafeInteger(FAST_FRAME) || FAST_FRAME < 0)) {
+  throw new Error('--fast-frame must be a non-negative integer')
 }
 
 type Benchmarks = {
@@ -462,7 +482,9 @@ for (const benchmark of BENCHMARKS) {
 
 const benchmarksToRun = BENCHMARKS.filter((bench) => !cliArgs.filter || cliArgs.filter?.includes(bench.filter))
 
-console.log(`Benchmarking ${benchmarksToRun.length} filters`)
+console.log(
+  `Benchmarking ${benchmarksToRun.length} filters${FAST_MODE ? ` (fast get_frame(${FAST_FRAME}))` : ''}`,
+)
 
 const results: Results[] = []
 for (const filter of benchmarksToRun) {
@@ -476,46 +498,83 @@ for (const filter of benchmarksToRun) {
     const args = [`output=${spec.plugin}`, `format=${spec.format}`].concat(spec.args)
     const vspipeArgs = args.flatMap((arg) => ['-a', arg])
 
-    for (let i = 0; i < WARMUP_ITERATIONS; i++) {
-      Bun.spawnSync(
-        [
-          'vspipe',
-          ...vspipeArgs,
-          '-e',
-          Math.round(spec.frames).toString(),
-          '-r',
-          '1',
-          filter.benchmarkPath,
-          '--',
-        ],
-        { stderr: 'pipe' },
-      )
-    }
+    if (FAST_MODE) {
+      const helperArgs = [
+        join(import.meta.dir, 'get_frame_benchmark.py'),
+        '--script',
+        join(import.meta.dir, filter.benchmarkPath),
+        '--node',
+        spec.plugin,
+        '--frame',
+        FAST_FRAME.toString(),
+        '--iterations',
+        ITERATIONS.toString(),
+        '--warmup',
+        WARMUP_ITERATIONS.toString(),
+      ]
+      for (const arg of args) helperArgs.push('--arg', arg)
 
-    for (let i = 0; i < ITERATIONS; i++) {
-      const { stderr } = Bun.spawnSync(
-        [
-          'vspipe',
-          ...vspipeArgs,
-          '-e',
-          Math.round(spec.frames).toString(),
-          '-r',
-          '1',
-          filter.benchmarkPath,
-          '--',
-        ],
-        { stderr: 'pipe' },
-      )
-
-      const fps = /(\d+\.?\d+?) fps/.exec(stderr.toString())?.[1]
-
-      if (!fps) {
-        throw new Error(`Unable to determine FPS from stderr: ${stderr}`)
+      const fastRun = Bun.spawnSync([FAST_PYTHON, ...helperArgs], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      const fastStdout = fastRun.stdout.toString()
+      const fastStderr = fastRun.stderr.toString()
+      if (fastRun.exitCode !== 0) {
+        throw new Error(`Fast benchmark failed for ${filter.filter}: ${fastStderr || fastStdout}`)
       }
 
-      fpsValues.push(Number.parseFloat(fps))
-    }
+      const jsonLines = fastStdout.trim().split(/\r?\n/).filter(Boolean)
+      const jsonLine = jsonLines[jsonLines.length - 1]
+      if (!jsonLine) {
+        throw new Error(`Fast benchmark produced no JSON for ${filter.filter}`)
+      }
+      const fastPayload = JSON.parse(jsonLine) as { fps_values?: number[] }
+      if (!Array.isArray(fastPayload.fps_values) || fastPayload.fps_values.length !== ITERATIONS) {
+        throw new Error(`Fast benchmark produced invalid samples for ${filter.filter}: ${fastStdout}`)
+      }
+      fpsValues.push(...fastPayload.fps_values.map(Number))
+    } else {
+      for (let i = 0; i < WARMUP_ITERATIONS; i++) {
+        Bun.spawnSync(
+          [
+            'vspipe',
+            ...vspipeArgs,
+            '-e',
+            Math.round(spec.frames).toString(),
+            '-r',
+            '1',
+            filter.benchmarkPath,
+            '--',
+          ],
+          { stderr: 'pipe' },
+        )
+      }
 
+      for (let i = 0; i < ITERATIONS; i++) {
+        const { stderr } = Bun.spawnSync(
+          [
+            'vspipe',
+            ...vspipeArgs,
+            '-e',
+            Math.round(spec.frames).toString(),
+            '-r',
+            '1',
+            filter.benchmarkPath,
+            '--',
+          ],
+          { stderr: 'pipe' },
+        )
+
+        const fps = /(\d+\.?\d+?) fps/.exec(stderr.toString())?.[1]
+
+        if (!fps) {
+          throw new Error(`Unable to determine FPS from stderr: ${stderr}`)
+        }
+
+        fpsValues.push(Number.parseFloat(fps))
+      }
+    }
     // Sort the results
     fpsValues.sort((a,b) => a - b)
 

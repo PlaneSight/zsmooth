@@ -54,6 +54,9 @@ const { values: cliArgs } = parseArgs({
     'frame-count-scale': { type: 'string', default: '1.0' },
     iterations: { type: 'string', default: '7' },
     warmup: { type: 'string', default: '1' },
+    fast: { type: 'boolean', default: false },
+    'fast-python': { type: 'string' },
+    'fast-frame': { type: 'string', default: '0' },
     optimize: { type: 'string', default: 'ReleaseFast' },
     output: { type: 'string', default: 'build/benchmarks/benchmark_comparison.json' },
     'markdown-output': { type: 'string', default: 'build/benchmarks/benchmark_comparison.md' },
@@ -92,6 +95,9 @@ Options:
   --frame-count-scale <n>      Scale fixture frame counts (default: 1.0)
   --iterations <n>             Measured iterations, minimum 3 (default: 7)
   --warmup <n>                 Warmup iterations (default: 1)
+  --fast                       Use direct get_frame timing for fast iteration
+  --fast-python <path>         Python runtime for --fast (default: $VAPOURSYNTH_PYTHON or python3)
+  --fast-frame <n>             Frame requested by --fast (default: 0)
   --optimize <mode>            Zig optimize mode (default: ReleaseFast)
   --output <path>              JSON output (default: build/benchmarks/benchmark_comparison.json)
   --markdown-output <path>     Markdown output (default: build/benchmarks/benchmark_comparison.md)
@@ -355,6 +361,11 @@ async function main(): Promise<void> {
       cpSync(candidateBenchmarks, benchmarkDir, { recursive: true })
 
       const runnerArgs = [join(benchmarkDir, 'run_benchmarks.ts'), '--frame-count-scale', frameCountScale.toString(), '--iterations', iterations.toString(), '--warmup', warmup.toString()]
+      if (cliArgs.fast === true) runnerArgs.push('--fast')
+      const fastPython = optionString('fast-python')
+      if (fastPython) runnerArgs.push('--fast-python', fastPython)
+      const fastFrame = optionString('fast-frame')
+      if (fastFrame) runnerArgs.push('--fast-frame', fastFrame)
       for (const filter of filters) runnerArgs.push('--filter', filter)
       for (const format of formats) runnerArgs.push('--format', format)
       for (const plugin of plugins) runnerArgs.push('--plugin', plugin)
