@@ -1217,7 +1217,7 @@ fn RemoveGrain(comptime T: type) type {
                         pixel.* = @floatFromInt((i * 37) % 251);
                     }
 
-                    inline for ([_]comptime_int{ 1, 2, 3, 4, 17 }) |mode| {
+                    inline for ([_]comptime_int{ 1, 2, 3, 4, 17, 20, 22 }) |mode| {
                         @memset(scalar, 0);
                         @memset(simd, 0);
                         processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
@@ -1373,10 +1373,11 @@ fn RemoveGrain(comptime T: type) type {
                     processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
                 17 => processPlaneVector(17, srcp, dstp, width, height, stride, chroma),
                 inline 13...16 => |m| processPlaneVectorInterlaced(m, srcp, dstp, width, height, stride, chroma),
-                inline 18...24 => |m| if (comptime T == f16)
+                inline 18...19, 21, 23...24 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
+                inline 20, 22 => |m| processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
                 else => unreachable,
             }
         }
