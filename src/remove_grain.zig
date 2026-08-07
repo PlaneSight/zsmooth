@@ -1227,6 +1227,17 @@ fn RemoveGrain(comptime T: type) type {
                             try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
                         }
                     }
+
+                    inline for ([_]comptime_int{13}) |mode| {
+                        @memset(scalar, 0);
+                        @memset(simd, 0);
+                        processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
+                        processPlaneVectorInterlaced(mode, srcp, simd, width, height, stride, false);
+                        for (0..height) |row| {
+                            const row_start = row * stride;
+                            try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                        }
+                    }
                 }
                 return;
             }
@@ -1326,6 +1337,25 @@ fn RemoveGrain(comptime T: type) type {
             try testing.expectEqual(@as(V, .{ 5, 5, 5, 7 }), removegrainVector(4, V, grid, false));
         }
 
+        test "FP16 SIMD mode 13 preserves tie order" {
+            if (comptime T != f16) return;
+
+            const V = @Vector(4, T);
+            const grid = gridcmn.Grid(V){
+                .top_left = @as(V, @splat(0)),
+                .top_center = @as(V, @splat(0.25)),
+                .top_right = @as(V, @splat(0)),
+                .center_left = @as(V, @splat(0)),
+                .center_center = @as(V, @splat(0.5)),
+                .center_right = @as(V, @splat(0)),
+                .bottom_left = @as(V, @splat(1)),
+                .bottom_center = @as(V, @splat(0.75)),
+                .bottom_right = @as(V, @splat(1)),
+            };
+
+            try testing.expectEqual(@as(V, @splat(0.5)), removegrainVector(13, V, grid, false));
+        }
+
         fn processPlane(mode: u5, noalias srcp8: []const u8, noalias dstp8: []u8, width: usize, height: usize, stride8: usize, chroma: bool) void {
             const stride = stride8 / @sizeOf(T);
             const srcp: []const T = @ptrCast(@alignCast(srcp8));
@@ -1337,7 +1367,8 @@ fn RemoveGrain(comptime T: type) type {
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
-                inline 13...16 => |m| if (comptime T == f16)
+                13 => processPlaneVectorInterlaced(13, srcp, dstp, width, height, stride, chroma),
+                inline 14...16 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVectorInterlaced(m, srcp, dstp, width, height, stride, chroma),
