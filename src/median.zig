@@ -6,6 +6,7 @@ const testing = @import("std").testing;
 const vscmn = @import("common/vapoursynth.zig");
 const gridcmn = @import("common/array_grid.zig");
 const vec = @import("common/vector.zig");
+const types = @import("common/type.zig");
 
 const float_mode: std.builtin.FloatMode = if (@import("config").optimize_float) .optimized else .strict;
 
@@ -109,7 +110,7 @@ fn Median(comptime T: type) type {
             std.debug.assert(width >= vector_len);
             std.debug.assert(radius < vector_len);
 
-            const width_simd = (width - radius) / vector_len * vector_len;
+            const interior_end = width - radius;
 
             // Top rows - mirrored
             for (0..radius) |row| {
@@ -129,19 +130,17 @@ fn Median(comptime T: type) type {
 
                 // Middle columns - not mirrored
                 var column: usize = radius;
-                while (column < width_simd) : (column += vector_len) {
+                while (column + vector_len <= interior_end) : (column += vector_len) {
                     var grid = GridV.initFromCenter(T, row, column, srcp, stride);
                     const result = median(&grid);
                     vec.storeAt(VT, dstp, row, column, stride, result);
                 }
 
-                // Last columns - non-mirrored
-                // We do this to minimize the use of scalar mirror code.
-                if (width_simd < width) {
-                    const adjusted_column = width - vector_len - radius;
-                    var grid = GridV.initFromCenter(T, row, adjusted_column, srcp, stride);
-                    const result = median(&grid);
-                    vec.storeAt(VT, dstp, row, adjusted_column, stride, result);
+                // Remaining interior columns - scalar, without mirrored indexing.
+                for (column..interior_end) |tail_column| {
+                    const top_left = ((row - radius) * stride) + tail_column - radius;
+                    var grid = GridS.init(T, srcp[top_left..], stride);
+                    dstp[(row * stride) + tail_column] = median(&grid);
                 }
 
                 // Last columns - mirrored
@@ -156,6 +155,39 @@ fn Median(comptime T: type) type {
                 for (0..width) |column| {
                     var grid = GridS.initFromCenterMirrored(T, row, column, width, height, srcp, stride);
                     dstp[(row * stride) + column] = median(&grid);
+                }
+            }
+        }
+        test "vector median matches scalar for strided tail widths" {
+            const widths = [_]usize{ vector_len, vector_len + 1, vector_len * 2 - 1, vector_len * 2 + 3 };
+
+            inline for ([_]comptime_int{ 1, 2, 3 }) |radius| {
+                for (widths) |width| {
+                    const height = radius * 2 + 3;
+                    const stride = width + 2;
+                    const size = height * stride;
+                    const srcp = try testing.allocator.alloc(T, size);
+                    defer testing.allocator.free(srcp);
+                    const scalar = try testing.allocator.alloc(T, size);
+                    defer testing.allocator.free(scalar);
+                    const simd = try testing.allocator.alloc(T, size);
+                    defer testing.allocator.free(simd);
+
+                    for (srcp, 0..) |*pixel, i| {
+                        const value = (i * 17 + radius * 11) % 251;
+                        pixel.* = switch (comptime types.numberType(T)) {
+                            .int => @intCast(value),
+                            .float => @floatCast(@as(f32, @floatFromInt(value)) / 251.0),
+                        };
+                    }
+
+                    processPlaneScalar(radius, srcp, scalar, width, height, stride);
+                    processPlaneVector(radius, srcp, simd, width, height, stride);
+
+                    for (0..height) |row| {
+                        const row_start = row * stride;
+                        try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                    }
                 }
             }
         }
