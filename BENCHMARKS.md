@@ -16,8 +16,8 @@ python -m benchmarks quick \
 ```
 
 The command builds the current checkout with `zig build -Doptimize=ReleaseFast`,
-generates the plan, runs the selected cases with one warmup and one measured
-iteration, and saves a report to
+generates the plan, runs the selected cases with three measured iterations and
+no warmup, and saves a report to
 `benchmarks/results/<commit>-quick.json` with raw plan/result JSON beside it.
 Omit `--function` and `--format` to run the complete generated catalog. Use
 `--no-build` when `zig-out/lib` is already built and only the benchmark needs to
@@ -28,8 +28,8 @@ python -m benchmarks quick \
   --function Median \
   --format f16 \
   --no-build \
-  --iterations 7 \
-  --warmup 1
+  --iterations 3 \
+  --warmup 0
 ```
 
 Use `--output PATH` to choose a different durable report path. The existing
@@ -84,8 +84,8 @@ python -m benchmarks.harness run \
   --warmup N
 ```
 
-`--timing direct|stream` accepts either timing mode. Both `--iterations` and
-`--warmup` must be positive integers. Direct timing clears the VapourSynth
+`--timing direct|stream` accepts either timing mode. `--iterations` must be a
+positive integer; `--warmup` may be zero to disable warmup. Direct timing clears
 cache, builds one graph, and measures one middle-frame `get_frame` request.
 Stream timing clears the cache, builds one graph, measures sequential requests
 for the plan's frame window, and reports the elapsed time per frame. Graph

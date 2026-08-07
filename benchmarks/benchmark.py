@@ -506,11 +506,16 @@ def _revision_json(revision: Revision) -> dict[str, str]:
     return {"requested": revision.requested, "resolved_ref": revision.ref, "commit": revision.commit}
 
 
-def _timing_from_args(args: argparse.Namespace, *, minimum_iterations: int = 3) -> Timing:
+def _timing_from_args(
+    args: argparse.Namespace,
+    *,
+    minimum_iterations: int = 3,
+    minimum_warmup: int = 1,
+) -> Timing:
     if args.iterations < minimum_iterations:
         raise BenchmarkError(f"--iterations must be an integer of at least {minimum_iterations}")
-    if args.warmup <= 0:
-        raise BenchmarkError("--warmup must be a positive integer")
+    if args.warmup < minimum_warmup:
+        raise BenchmarkError(f"--warmup must be an integer of at least {minimum_warmup}")
     return Timing(args.timing, args.iterations, args.warmup)
 
 
@@ -518,11 +523,10 @@ def _local_plugin_path(repo_root: Path, requested: str | None) -> Path:
     path = Path(requested).expanduser() if requested else repo_root / "zig-out" / "lib"
     return path if path.is_absolute() else (repo_root / path).resolve()
 
-
 def _run_local(args: argparse.Namespace) -> int:
     repo_root = resolve_repo_root()
     runtime = python_runtime(args.python_runtime)
-    timing = _timing_from_args(args, minimum_iterations=1)
+    timing = _timing_from_args(args, minimum_iterations=3, minimum_warmup=0)
     plugin_path = _local_plugin_path(repo_root, args.plugin_path)
     if not args.no_build:
         print(f"Building {repo_root} with {_command_text(BUILD_COMMAND)}")
@@ -759,8 +763,8 @@ def build_parser() -> argparse.ArgumentParser:
     quick.add_argument("--plugin-path", help="use this built plugin directory instead of zig-out/lib")
     quick.add_argument("--no-build", action="store_true", help="reuse the plugin already present at --plugin-path")
     quick.add_argument("--python", "--python-runtime", dest="python_runtime")
-    quick.add_argument("--iterations", type=int, default=1)
-    quick.add_argument("--warmup", type=int, default=1)
+    quick.add_argument("--iterations", type=int, default=3)
+    quick.add_argument("--warmup", type=int, default=0)
     quick.add_argument("--timing", choices=("direct", "stream"), default="direct")
     quick.add_argument("--output")
 

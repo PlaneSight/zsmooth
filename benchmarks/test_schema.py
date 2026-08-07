@@ -44,8 +44,8 @@ class BenchmarkSchemaTests(unittest.TestCase):
         self.assertEqual(arguments.command, "quick")
         self.assertEqual(arguments.functions, [])
         self.assertEqual(arguments.formats, [])
-        self.assertEqual(arguments.iterations, 1)
-        self.assertEqual(arguments.warmup, 1)
+        self.assertEqual(arguments.iterations, 3)
+        self.assertEqual(arguments.warmup, 0)
         self.assertEqual(arguments.timing, "direct")
         self.assertFalse(arguments.no_build)
 

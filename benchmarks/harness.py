@@ -85,6 +85,16 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _nonnegative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return parsed
+
+
 def _string_value(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", "replace")
@@ -559,7 +569,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--output", required=True)
     run.add_argument("--timing", choices=("direct", "stream"), required=True)
     run.add_argument("--iterations", type=_positive_int, required=True)
-    run.add_argument("--warmup", type=_positive_int, required=True)
+    run.add_argument("--warmup", type=_nonnegative_int, required=True)
     run.set_defaults(handler=_command_run)
     return parser
 
