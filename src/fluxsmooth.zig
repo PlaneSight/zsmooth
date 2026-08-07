@@ -166,8 +166,14 @@ fn FluxSmooth(comptime T: type, comptime mode: FluxSmoothMode) type {
                     fluxsmoothTVector(srcp, dstp, offset, threshold);
                 }
 
-                if (width_simd < width) {
-                    fluxsmoothTVector(srcp, dstp, (row * stride) + width - vec_size, threshold);
+                for (width_simd..width) |column| {
+                    const offset = row * stride + column;
+                    dstp[offset] = fluxsmoothTemporalScalar(
+                        srcp[0][offset],
+                        srcp[1][offset],
+                        srcp[2][offset],
+                        threshold,
+                    );
                 }
             }
         }
@@ -299,10 +305,84 @@ fn FluxSmooth(comptime T: type, comptime mode: FluxSmoothMode) type {
             fluxsmoothTVector(srcp, dstp, 0, threshold);
             try std.testing.expectEqualDeep(expected, dstp);
         }
+        test "processPlane temporal tails match scalar" {
+            const vec_size = vec.getVecSize(T);
+            const widths = [_]usize{ vec_size - 1, vec_size, vec_size + 1, vec_size * 2 - 1, vec_size * 2 + 3 };
+            const height = 3;
+
+            for (widths) |width| {
+                const stride = width + 5;
+                const size = height * stride;
+                var srcp: [3][]const T = undefined;
+                for (0..3) |frame| {
+                    const src = try testingAllocator.alloc(T, size);
+                    for (src, 0..) |*pixel, i| {
+                        const value = (i * 13 + frame * 17) % 251;
+                        pixel.* = switch (types.numberType(T)) {
+                            .int => @intCast(value),
+                            .float => @floatCast(@as(f32, @floatFromInt(value)) / 251.0),
+                        };
+                    }
+                    srcp[frame] = src;
+                }
+                defer for (srcp) |src| testingAllocator.free(src);
+
+                const scalar = try testingAllocator.alloc(T, size);
+                defer testingAllocator.free(scalar);
+                const vector = try testingAllocator.alloc(T, size);
+                defer testingAllocator.free(vector);
+
+                processPlaneTemporalScalar(srcp, scalar, width, height, stride, math.lossyCast(T, 3));
+                processPlaneTemporalVector(srcp, vector, width, height, stride, math.lossyCast(T, 3));
+
+                for (0..height) |row| {
+                    const start = row * stride;
+                    try testing.expectEqualSlices(T, scalar[start..][0..width], vector[start..][0..width]);
+                }
+            }
+        }
+        test "processPlane spatial temporal tails match scalar" {
+            const vec_size = vec.getVecSize(T);
+            const widths = [_]usize{ vec_size - 1, vec_size, vec_size + 1, vec_size * 2 - 1, vec_size * 2 + 3 };
+            const height = 4;
+            const temporal_threshold = math.lossyCast(SAT, 3);
+            const spatial_threshold = math.lossyCast(SAT, 5);
+
+            for (widths) |width| {
+                const stride = width + 5;
+                const size = height * stride;
+                var srcp: [3][]const T = undefined;
+                for (0..3) |frame| {
+                    const src = try testingAllocator.alloc(T, size);
+                    for (src, 0..) |*pixel, i| {
+                        const value = (i * 17 + frame * 23) % 251;
+                        pixel.* = switch (types.numberType(T)) {
+                            .int => @intCast(value),
+                            .float => @floatCast(@as(f32, @floatFromInt(value)) / 251.0),
+                        };
+                    }
+                    srcp[frame] = src;
+                }
+                defer for (srcp) |src| testingAllocator.free(src);
+
+                const scalar = try testingAllocator.alloc(T, size);
+                defer testingAllocator.free(scalar);
+                const vector = try testingAllocator.alloc(T, size);
+                defer testingAllocator.free(vector);
+
+                processPlaneSpatialTemporalScalar(srcp, scalar, width, height, stride, temporal_threshold, spatial_threshold);
+                processPlaneSpatialTemporalVector(srcp, vector, width, height, stride, temporal_threshold, spatial_threshold);
+
+                for (0..height) |row| {
+                    const start = row * stride;
+                    try testing.expectEqualSlices(T, scalar[start..][0..width], vector[start..][0..width]);
+                }
+            }
+        }
 
         fn processPlaneSpatialTemporalScalar(srcp: [3][]const T, noalias dstp: []T, width: usize, height: usize, stride: usize, temporal_threshold: SAT, spatial_threshold: SAT) void {
             // Copy the first line
-            @memcpy(dstp, srcp[1][0..width]);
+            @memcpy(dstp[0..width], srcp[1][0..width]);
 
             for (1..height - 1) |row| {
                 // Copy the pixel at the beginning of the line.
@@ -344,7 +424,7 @@ fn FluxSmooth(comptime T: type, comptime mode: FluxSmoothMode) type {
 
             // Copy the last line.
             const lastLine = ((height - 1) * stride);
-            @memcpy(dstp[lastLine..], srcp[1][lastLine..(lastLine + width)]);
+            @memcpy(dstp[lastLine..(lastLine + width)], srcp[1][lastLine..(lastLine + width)]);
         }
 
         // TODO: Add tests.
@@ -415,39 +495,56 @@ fn FluxSmooth(comptime T: type, comptime mode: FluxSmoothMode) type {
                 return curr;
             }
         }
-
         fn processPlaneSpatialTemporalVector(srcp: [3][]const T, noalias dstp: []T, width: usize, height: usize, stride: usize, temporal_threshold: anytype, spatial_threshold: anytype) void {
             const vec_size = vec.getVecSize(T);
-            const width_simd = width / vec_size * vec_size;
+            const interior_width = if (width > 2) width - 2 else 0;
+            const width_simd = interior_width / vec_size * vec_size;
 
             // Copy the first line
-            @memcpy(dstp, srcp[1][0..width]);
+            @memcpy(dstp[0..width], srcp[1][0..width]);
 
             for (1..height - 1) |row| {
-                var column: usize = 1;
-                while (column < width_simd) : (column += vec_size) {
-                    const offset = row * stride + column;
-                    fluxsmoothSTVector(srcp, dstp, offset, stride, temporal_threshold, spatial_threshold);
-                }
+                if (width > 2) {
+                    var column: usize = 1;
+                    while (column < 1 + width_simd) : (column += vec_size) {
+                        const offset = row * stride + column;
+                        fluxsmoothSTVector(srcp, dstp, offset, stride, temporal_threshold, spatial_threshold);
+                    }
 
-                if (width_simd < width) {
-                    fluxsmoothSTVector(srcp, dstp, (row * stride) + width - vec_size, stride, temporal_threshold, spatial_threshold);
+                    for (1 + width_simd..width - 1) |tail_column| {
+                        const current_pixel = row * stride + tail_column;
+                        const row_prev = (row - 1) * stride;
+                        const row_curr = row * stride;
+                        const row_next = (row + 1) * stride;
+                        const neighbors = [_]T{
+                            srcp[1][row_prev + tail_column - 1],
+                            srcp[1][row_prev + tail_column],
+                            srcp[1][row_prev + tail_column + 1],
+                            srcp[1][row_curr + tail_column - 1],
+                            srcp[1][row_curr + tail_column + 1],
+                            srcp[1][row_next + tail_column - 1],
+                            srcp[1][row_next + tail_column],
+                            srcp[1][row_next + tail_column + 1],
+                        };
+                        dstp[current_pixel] = fluxsmoothSpatialTemporalScalar(
+                            srcp[0][current_pixel],
+                            srcp[1][current_pixel],
+                            srcp[2][current_pixel],
+                            neighbors,
+                            temporal_threshold,
+                            spatial_threshold,
+                        );
+                    }
                 }
 
                 // Copy the first and last pixels.
-                // We do this at the end in order to keep the vector
-                // operations aligned. We just throw away 2 of the values.
-
-                // Copy the pixel at the beginning of the line.
-                dstp[(row * stride)] = srcp[1][(row * stride)];
-
-                // Copy the pixel at the end of the line.
-                dstp[(row * stride) + (width - 1)] = srcp[1][(row * stride) + (width - 1)];
+                dstp[row * stride] = srcp[1][row * stride];
+                dstp[row * stride + (width - 1)] = srcp[1][row * stride + (width - 1)];
             }
 
             // Copy the last line.
             const lastLine = ((height - 1) * stride);
-            @memcpy(dstp[lastLine..], srcp[1][lastLine..(lastLine + width)]);
+            @memcpy(dstp[lastLine..(lastLine + width)], srcp[1][lastLine..(lastLine + width)]);
         }
 
         // TODO: Add tests for this function.
