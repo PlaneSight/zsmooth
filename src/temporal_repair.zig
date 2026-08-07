@@ -265,7 +265,7 @@ fn TemporalRepair(comptime T: type) type {
             }
         }
 
-        test "SIMD TemporalRepair modes 0 and 4 match scalar reference" {
+        test "SIMD TemporalRepair modes 0-4 match scalar reference" {
             if (comptime T == f16) return;
 
             const width = vec.getVecSize(T) + 3;
@@ -320,6 +320,16 @@ fn TemporalRepair(comptime T: type) type {
                     try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
                 }
             }
+            inline for ([_]comptime_int{ 1, 2, 3 }) |mode| {
+                @memset(scalar, 0);
+                @memset(simd, 0);
+                processPlaneScalarSpatialTemporal(mode, types.getTypeMinimum(T, false), types.getTypeMaximum(T, false), srcp, prev_repairp, curr_repairp, next_repairp, scalar, width, height, stride);
+                processPlaneVectorSpatialTemporal(mode, types.getTypeMinimum(T, false), types.getTypeMaximum(T, false), srcp, prev_repairp, curr_repairp, next_repairp, simd, width, height, stride);
+                for (0..height) |row| {
+                    const row_start = row * stride;
+                    try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                }
+            }
         }
 
 
@@ -369,6 +379,116 @@ fn TemporalRepair(comptime T: type) type {
                 dstp[((height - 1) * stride) + column] = spatialTemporalRepair(mode, format_min, format_max, src, prev, curr, next);
             }
         }
+        fn spatialTemporalRepairVector(mode: comptime_int, format_min: T, format_max: T, src: @Vector(vec.getVecSize(T), T), prev_repair: gridcmn.ArrayGrid(3, @Vector(vec.getVecSize(T), T)), curr_repair: gridcmn.ArrayGrid(3, @Vector(vec.getVecSize(T), T)), next_repair: gridcmn.ArrayGrid(3, @Vector(vec.getVecSize(T), T))) @Vector(vec.getVecSize(T), T) {
+            @setFloatMode(float_mode);
+            const V = @Vector(vec.getVecSize(T), T);
+            const vmin: V = @splat(format_min);
+            const vmax: V = @splat(format_max);
+            const center_idx = curr_repair.values.len / 2;
+            var brightest_diff_max: V = @splat(0);
+            var darkest_diff_max: V = @splat(0);
+
+            switch (mode) {
+                1 => {
+                    inline for (prev_repair.values, curr_repair.values, next_repair.values, 0..) |p, c, n, i| {
+                        if (i == center_idx) continue;
+                        const brightest = subSat(@max(p, n), c, vmin);
+                        const darkest = subSat(c, @min(p, n), vmin);
+                        brightest_diff_max = @max(brightest, brightest_diff_max);
+                        darkest_diff_max = @max(darkest, darkest_diff_max);
+                    }
+                    const brightest_curr = addSat(brightest_diff_max, curr_repair.values[center_idx], vmax);
+                    const darkest_curr = subSat(curr_repair.values[center_idx], darkest_diff_max, vmin);
+                    const maximum = @max(brightest_curr, prev_repair.values[center_idx], next_repair.values[center_idx]);
+                    const minimum = @min(darkest_curr, prev_repair.values[center_idx], next_repair.values[center_idx]);
+                    return math.clamp(src, minimum, maximum);
+                },
+                2 => {
+                    inline for (prev_repair.values, curr_repair.values, next_repair.values) |p, c, n| {
+                        const brightest = subSat(@max(p, n), c, vmin);
+                        const darkest = subSat(c, @min(p, n), vmin);
+                        brightest_diff_max = @max(brightest, brightest_diff_max);
+                        darkest_diff_max = @max(darkest, darkest_diff_max);
+                    }
+                    const diff_max = @max(brightest_diff_max, darkest_diff_max);
+                    var upper = addSat(curr_repair.values[center_idx], diff_max, vmax);
+                    const lower = subSat(curr_repair.values[center_idx], diff_max, vmin);
+                    upper = if (comptime types.isFloat(T)) @max(upper, lower) else upper;
+                    return math.clamp(src, lower, upper);
+                },
+                3 => {
+                    var prev_diff_max: V = @splat(0);
+                    var next_diff_max: V = @splat(0);
+                    inline for (prev_repair.values, curr_repair.values, next_repair.values) |p, c, n| {
+                        prev_diff_max = @max(math.absDiff(c, p), prev_diff_max);
+                        next_diff_max = @max(math.absDiff(c, n), next_diff_max);
+                    }
+                    const diff_min = @min(prev_diff_max, next_diff_max);
+                    var upper = addSat(curr_repair.values[center_idx], diff_min, vmax);
+                    const lower = subSat(curr_repair.values[center_idx], diff_min, vmin);
+                    upper = if (comptime types.isFloat(T)) @max(upper, lower) else upper;
+                    return math.clamp(src, lower, upper);
+                },
+                else => unreachable,
+            }
+        }
+
+        fn processPlaneVectorSpatialTemporal(mode: comptime_int, format_min: T, format_max: T, noalias srcp: []const T, noalias prev_repairp: []const T, noalias curr_repairp: []const T, noalias next_repairp: []const T, noalias dstp: []T, width: usize, height: usize, stride: usize) void {
+            const V = @Vector(vec.getVecSize(T), T);
+            const vector_len = @typeInfo(V).vector.len;
+            const GridV = gridcmn.ArrayGrid(3, V);
+
+            for (0..width) |column| {
+                const src = srcp[column];
+                const prev = Grid.initFromCenterMirrored(T, 0, column, width, height, prev_repairp, stride);
+                const curr = Grid.initFromCenterMirrored(T, 0, column, width, height, curr_repairp, stride);
+                const next = Grid.initFromCenterMirrored(T, 0, column, width, height, next_repairp, stride);
+                dstp[column] = spatialTemporalRepair(mode, format_min, format_max, src, prev, curr, next);
+            }
+
+            for (1..height - 1) |row| {
+                const row_start = row * stride;
+                const src_first = srcp[row_start];
+                const prev_first = Grid.initFromCenterMirrored(T, row, 0, width, height, prev_repairp, stride);
+                const curr_first = Grid.initFromCenterMirrored(T, row, 0, width, height, curr_repairp, stride);
+                const next_first = Grid.initFromCenterMirrored(T, row, 0, width, height, next_repairp, stride);
+                dstp[row_start] = spatialTemporalRepair(mode, format_min, format_max, src_first, prev_first, curr_first, next_first);
+
+                var column: usize = 1;
+                while (column + vector_len <= width - 1) : (column += vector_len) {
+                    const top_left = (row - 1) * stride + column - 1;
+                    const src = vec.load(V, srcp, row_start + column);
+                    const prev = GridV.init(T, prev_repairp[top_left..], stride);
+                    const curr = GridV.init(T, curr_repairp[top_left..], stride);
+                    const next = GridV.init(T, next_repairp[top_left..], stride);
+                    vec.store(V, dstp, row_start + column, spatialTemporalRepairVector(mode, format_min, format_max, src, prev, curr, next));
+                }
+
+                for (column..width - 1) |tail_column| {
+                    const offset = row_start + tail_column;
+                    const prev = Grid.initFromCenter(T, row, tail_column, prev_repairp, stride);
+                    const curr = Grid.initFromCenter(T, row, tail_column, curr_repairp, stride);
+                    const next = Grid.initFromCenter(T, row, tail_column, next_repairp, stride);
+                    dstp[offset] = spatialTemporalRepair(mode, format_min, format_max, srcp[offset], prev, curr, next);
+                }
+
+                const last_column = width - 1;
+                const src_last = srcp[row_start + last_column];
+                const prev_last = Grid.initFromCenterMirrored(T, row, last_column, width, height, prev_repairp, stride);
+                const curr_last = Grid.initFromCenterMirrored(T, row, last_column, width, height, curr_repairp, stride);
+                const next_last = Grid.initFromCenterMirrored(T, row, last_column, width, height, next_repairp, stride);
+                dstp[row_start + last_column] = spatialTemporalRepair(mode, format_min, format_max, src_last, prev_last, curr_last, next_last);
+            }
+
+            for (0..width) |column| {
+                const offset = (height - 1) * stride + column;
+                const src = srcp[offset];
+                const prev = Grid.initFromCenterMirrored(T, height - 1, column, width, height, prev_repairp, stride);
+                const curr = Grid.initFromCenterMirrored(T, height - 1, column, width, height, curr_repairp, stride);
+                const next = Grid.initFromCenterMirrored(T, height - 1, column, width, height, next_repairp, stride);
+                dstp[offset] = spatialTemporalRepair(mode, format_min, format_max, src, prev, curr, next);
+            }
+        }
 
         fn processPlane(mode: u8, chroma: bool, bits_per_sample: u6, noalias srcp8: []const u8, noalias prev_repairp8: []const u8, noalias curr_repairp8: []const u8, noalias next_repairp8: []const u8, noalias dstp8: []u8, width: usize, height: usize, stride8: usize) void {
             const stride = stride8 / @sizeOf(T);
@@ -386,9 +506,18 @@ fn TemporalRepair(comptime T: type) type {
                     processPlaneScalarTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride)
                 else
                     processPlaneVectorTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
-                inline 1 => |r| processPlaneScalarSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
-                inline 2 => |r| processPlaneScalarSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
-                inline 3 => |r| processPlaneScalarSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
+                inline 1 => |r| if (comptime T == f16)
+                    processPlaneScalarSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride)
+                else
+                    processPlaneVectorSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
+                inline 2 => |r| if (comptime T == f16)
+                    processPlaneScalarSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride)
+                else
+                    processPlaneVectorSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
+                inline 3 => |r| if (comptime T == f16)
+                    processPlaneScalarSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride)
+                else
+                    processPlaneVectorSpatialTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride),
                 inline 4 => |r| if (comptime T == f16)
                     processPlaneScalarTemporal(r, format_min, format_max, srcp, prev_repairp, curr_repairp, next_repairp, dstp, width, height, stride)
                 else
