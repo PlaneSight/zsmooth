@@ -1262,7 +1262,7 @@ fn Repair(comptime T: type) type {
                 dstp[offset] = repair(mode, src, grid, chroma);
             }
         }
-        test "SIMD Repair modes 1-24 match scalar reference" {
+        test "SIMD vector candidates match scalar reference" {
             if (comptime T == f16) return;
 
             const width = vec.getVecSize(T) + 3;
@@ -1291,7 +1291,10 @@ fn Repair(comptime T: type) type {
                 }
             }
 
-            inline for ([_]comptime_int{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 }) |mode| {
+            inline for ([_]comptime_int{
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            }) |mode| {
                 @memset(scalar, 0);
                 @memset(simd, 0);
                 processPlaneScalar(mode, srcp, repairp, scalar, width, height, stride, false);
@@ -1315,7 +1318,7 @@ fn Repair(comptime T: type) type {
             }
         }
 
-        test "FP16 SIMD Repair modes 1-4, 11-14, 17, 20, and 22 match scalar reference" {
+        test "FP16 SIMD vector candidates match scalar reference" {
             if (comptime T != f16) return;
 
             const vector_len = vec.getVecSize(T);
@@ -1323,7 +1326,9 @@ fn Repair(comptime T: type) type {
                 if (vector_len > 1) vector_len - 1 else vector_len,
                 vector_len,
                 vector_len + 1,
+                vector_len + 2,
                 vector_len + 3,
+                vector_len * 2 + 3,
             };
             const height = 5;
 
@@ -1346,8 +1351,11 @@ fn Repair(comptime T: type) type {
                     pixel.* = @floatFromInt((i * 29 + 3) % 251);
                 }
 
-                inline for ([_]comptime_int{ 1, 2, 3, 4, 11, 12, 13, 14, 17, 20, 22 }) |mode| {
-                    inline for ([_]bool{ false, true }) |chroma| {
+                inline for ([_]bool{ false, true }) |chroma| {
+                    inline for ([_]comptime_int{
+                        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                        13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+                    }) |mode| {
                         @memset(scalar, 0);
                         @memset(simd, 0);
                         processPlaneScalar(mode, srcp, repairp, scalar, width, height, stride, chroma);
@@ -1361,7 +1369,97 @@ fn Repair(comptime T: type) type {
             }
         }
 
-        test "FP16 SIMD Repair modes 12-14 preserve tie order" {
+        test "FP16 SIMD candidate selectors preserve scalar RGVS priority" {
+            if (comptime T != f16) return;
+
+            const V = @Vector(4, T);
+            // Lanes correspond to the four scalar Repair mode-5 clipping
+            // cases above; each scalar assertion selects 2 for src=1.
+            const line_grid = gridcmn.Grid(V){
+                .top_left = @as(V, .{ 2, 6, 6, 6 }),
+                .top_center = @as(V, .{ 6, 2, 6, 6 }),
+                .top_right = @as(V, .{ 6, 6, 2, 6 }),
+                .center_left = @as(V, .{ 6, 6, 6, 2 }),
+                .center_center = @as(V, .{ 2, 2, 2, 2 }),
+                .center_right = @as(V, .{ 7, 7, 3, 3 }),
+                .bottom_left = @as(V, .{ 7, 7, 3, 7 }),
+                .bottom_center = @as(V, .{ 7, 3, 7, 7 }),
+                .bottom_right = @as(V, .{ 3, 7, 7, 7 }),
+            };
+            const source: V = @splat(1);
+            const expected: V = @splat(2);
+
+            try testing.expectEqual(expected, repairVector(5, V, source, line_grid, false));
+
+            // Lanes correspond to the four scalar Repair mode-9 clipping
+            // cases above; each scalar assertion selects 2 for src=1.
+            const mode9_grid = gridcmn.Grid(V){
+                .top_left = @as(V, .{ 2, 0, 0, 0 }),
+                .top_center = @as(V, .{ 0, 2, 0, 0 }),
+                .top_right = @as(V, .{ 0, 0, 2, 0 }),
+                .center_left = @as(V, .{ 0, 0, 0, 2 }),
+                .center_center = @as(V, @splat(2)),
+                .center_right = @as(V, .{ 100, 100, 100, 3 }),
+                .bottom_left = @as(V, .{ 100, 100, 3, 100 }),
+                .bottom_center = @as(V, .{ 100, 3, 100, 100 }),
+                .bottom_right = @as(V, .{ 3, 100, 100, 100 }),
+            };
+
+            try testing.expectEqual(expected, repairVector(9, V, source, mode9_grid, false));
+            const tie_grid = gridcmn.Grid(V){
+                .top_left = @as(V, @splat(0)),
+                .top_center = @as(V, @splat(0)),
+                .top_right = @as(V, @splat(0)),
+                .center_left = @as(V, @splat(0.5)),
+                .center_center = @as(V, @splat(0.5)),
+                .center_right = @as(V, @splat(1)),
+                .bottom_left = @as(V, @splat(1)),
+                .bottom_center = @as(V, @splat(1)),
+                .bottom_right = @as(V, @splat(1)),
+            };
+            const tie_source: V = @splat(0);
+            const tie_expected: V = @splat(0.5);
+
+            // Every candidate score ties after the scalar bounds clamp; RGVS
+            // priority selects the fourth opposing pair.
+            try testing.expectEqual(tie_expected, repairVector(6, V, tie_source, tie_grid, false));
+            try testing.expectEqual(tie_expected, repairVector(7, V, tie_source, tie_grid, false));
+            try testing.expectEqual(tie_expected, repairVector(8, V, tie_source, tie_grid, false));
+            try testing.expectEqual(tie_expected, repairVector(9, V, tie_source, tie_grid, false));
+
+            const nearest_tie_grid = gridcmn.Grid(V){
+                .top_left = @as(V, @splat(0)),
+                .top_center = @as(V, @splat(1)),
+                .top_right = @as(V, @splat(0)),
+                .center_left = @as(V, @splat(1)),
+                .center_center = @as(V, @splat(0)),
+                .center_right = @as(V, @splat(1)),
+                .bottom_left = @as(V, @splat(0)),
+                .bottom_center = @as(V, @splat(0)),
+                .bottom_right = @as(V, @splat(1)),
+            };
+
+            // All neighbor distances tie; the documented scalar priority
+            // selects bottom-center (d7).
+            try testing.expectEqual(@as(V, @splat(0)), repairVector(10, V, @as(V, @splat(0.5)), nearest_tie_grid, false));
+            // Lanes correspond to the first four scalar Repair mode-10
+            // nearest-neighbour cases above; each scalar assertion selects 2.
+            const nearest_grid = gridcmn.Grid(V){
+                .top_left = @as(V, .{ 2, 9, 8, 7 }),
+                .top_center = @as(V, .{ 3, 2, 9, 8 }),
+                .top_right = @as(V, .{ 4, 3, 2, 9 }),
+                .center_left = @as(V, .{ 5, 4, 3, 2 }),
+                .center_center = @as(V, @splat(10)),
+                .center_right = @as(V, .{ 6, 5, 4, 3 }),
+                .bottom_left = @as(V, .{ 7, 6, 5, 4 }),
+                .bottom_center = @as(V, .{ 8, 7, 6, 5 }),
+                .bottom_right = @as(V, .{ 9, 8, 7, 6 }),
+            };
+
+            try testing.expectEqual(expected, repairVector(10, V, source, nearest_grid, false));
+        }
+
+        test "FP16 SIMD order-statistic candidates preserve exact selection" {
             if (comptime T != f16) return;
 
             const V = @Vector(4, T);
@@ -1382,7 +1480,7 @@ fn Repair(comptime T: type) type {
             try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), repairVector(14, V, grid.center_center, grid, false));
         }
 
-        test "FP16 SIMD Repair mode 17 preserves bounds" {
+        test "FP16 SIMD bounded candidate preserves exact limits" {
             if (comptime T != f16) return;
 
             const V = @Vector(4, T);
@@ -1401,7 +1499,7 @@ fn Repair(comptime T: type) type {
             try testing.expectEqual(@as(V, .{ 4, 4, 6, 6 }), repairVector(17, V, @as(V, .{ 0, 3, 7, 11 }), grid, false));
         }
 
-        test "FP16 SIMD Repair mode 20 clamps constant neighborhood" {
+        test "FP16 SIMD constant-neighborhood candidate preserves exact clamping" {
             if (comptime T != f16) return;
 
             const V = @Vector(4, T);
@@ -1420,7 +1518,7 @@ fn Repair(comptime T: type) type {
             try testing.expectEqual(@as(V, @splat(0.5)), repairVector(20, V, @as(V, .{ 0, 0.5, 0.75, 1 }), grid, false));
         }
 
-        test "FP16 SIMD Repair mode 22 clamps constant neighborhood" {
+        test "FP16 SIMD source-neighborhood candidate preserves exact clamping" {
             if (comptime T != f16) return;
 
             const V = @Vector(4, T);

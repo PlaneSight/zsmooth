@@ -1192,14 +1192,16 @@ fn RemoveGrain(comptime T: type) type {
             }
         }
 
-        test "SIMD modes match scalar reference" {
+        test "SIMD vector candidates match scalar reference" {
             if (comptime T == f16) {
                 const vector_len = vec.getVecSize(T);
                 const widths = [_]usize{
                     if (vector_len > 1) vector_len - 1 else vector_len,
                     vector_len,
                     vector_len + 1,
+                    vector_len + 2,
                     vector_len + 3,
+                    vector_len * 2 + 3,
                 };
                 const height = 5;
 
@@ -1217,25 +1219,30 @@ fn RemoveGrain(comptime T: type) type {
                         pixel.* = @floatFromInt((i * 37) % 251);
                     }
 
-                    inline for ([_]comptime_int{ 1, 2, 3, 4, 17, 20, 22 }) |mode| {
-                        @memset(scalar, 0);
-                        @memset(simd, 0);
-                        processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
-                        processPlaneVector(mode, srcp, simd, width, height, stride, false);
-                        for (0..height) |row| {
-                            const row_start = row * stride;
-                            try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                    inline for ([_]bool{ false, true }) |chroma| {
+                        inline for ([_]comptime_int{
+                            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                            17, 18, 19, 20, 21, 22, 23, 24,
+                        }) |mode| {
+                            @memset(scalar, 0);
+                            @memset(simd, 0);
+                            processPlaneScalar(mode, srcp, scalar, width, height, stride, chroma);
+                            processPlaneVector(mode, srcp, simd, width, height, stride, chroma);
+                            for (0..height) |row| {
+                                const row_start = row * stride;
+                                try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                            }
                         }
-                    }
 
-                    inline for ([_]comptime_int{ 13, 14, 15, 16 }) |mode| {
-                        @memset(scalar, 0);
-                        @memset(simd, 0);
-                        processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
-                        processPlaneVectorInterlaced(mode, srcp, simd, width, height, stride, false);
-                        for (0..height) |row| {
-                            const row_start = row * stride;
-                            try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                        inline for ([_]comptime_int{ 13, 14, 15, 16 }) |mode| {
+                            @memset(scalar, 0);
+                            @memset(simd, 0);
+                            processPlaneScalar(mode, srcp, scalar, width, height, stride, chroma);
+                            processPlaneVectorInterlaced(mode, srcp, simd, width, height, stride, chroma);
+                            for (0..height) |row| {
+                                const row_start = row * stride;
+                                try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                            }
                         }
                     }
                 }
@@ -1282,8 +1289,21 @@ fn RemoveGrain(comptime T: type) type {
                 }
             }
         }
-        test "SIMD modes 5-24 preserve tie order" {
-            if (comptime T == f16) return;
+        fn scalarGridAt(comptime V: type, grid: gridcmn.Grid(V), comptime lane: usize) Grid {
+            return .{
+                .top_left = grid.top_left[lane],
+                .top_center = grid.top_center[lane],
+                .top_right = grid.top_right[lane],
+                .center_left = grid.center_left[lane],
+                .center_center = grid.center_center[lane],
+                .center_right = grid.center_right[lane],
+                .bottom_left = grid.bottom_left[lane],
+                .bottom_center = grid.bottom_center[lane],
+                .bottom_right = grid.bottom_right[lane],
+            };
+        }
+
+        test "SIMD vector candidates preserve RGVS tie order" {
 
             const V = @Vector(4, T);
             const grid = gridcmn.Grid(V){
@@ -1298,25 +1318,18 @@ fn RemoveGrain(comptime T: type) type {
                 .bottom_right = @as(V, .{ 4, 4, 4, 4 }),
             };
 
-            try testing.expectEqual(@as(V, .{ 6, 6, 4, 4 }), removegrainVector(5, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 6, 6, 4, 4 }), removegrainVector(6, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 6, 6, 4, 4 }), removegrainVector(7, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 6, 7, 7, 7 }), removegrainVector(8, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 6, 7, 7, 7 }), removegrainVector(9, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 4, 4, 4, 4 }), removegrainVector(10, V, grid, false));
-            const weighted_expected: T = if (types.isFloat(T)) 5.75 else 6;
-            try testing.expectEqual(@as(V, @splat(weighted_expected)), removegrainVector(11, V, grid, false));
-            try testing.expectEqual(@as(V, @splat(weighted_expected)), removegrainVector(12, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 6, 6, 6, 6 }), removegrainVector(18, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(19, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(20, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(21, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(22, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(23, V, grid, false));
-            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(24, V, grid, false));
+            inline for ([_]comptime_int{ 5, 6, 7, 8, 9, 10, 11, 12, 18, 19, 20, 21, 22, 23, 24 }) |mode| {
+                const scalar_expected = @as(V, .{
+                    removegrain(mode, scalarGridAt(V, grid, 0), false),
+                    removegrain(mode, scalarGridAt(V, grid, 1), false),
+                    removegrain(mode, scalarGridAt(V, grid, 2), false),
+                    removegrain(mode, scalarGridAt(V, grid, 3), false),
+                });
+                try testing.expectEqual(scalar_expected, removegrainVector(mode, V, grid, false));
+            }
         }
 
-        test "FP16 SIMD modes 2-4 preserve tie order" {
+        test "FP16 SIMD median selectors preserve RGVS tie order" {
             if (comptime T != f16) return;
 
             const V = @Vector(4, T);
@@ -1337,7 +1350,7 @@ fn RemoveGrain(comptime T: type) type {
             try testing.expectEqual(@as(V, .{ 5, 5, 5, 7 }), removegrainVector(4, V, grid, false));
         }
 
-        test "FP16 SIMD modes 13-17 preserve bounds" {
+        test "FP16 SIMD bounds and interpolation preserve exact scalar selections" {
             if (comptime T != f16) return;
 
             const V = @Vector(4, T);
@@ -1358,6 +1371,22 @@ fn RemoveGrain(comptime T: type) type {
             try testing.expectEqual(@as(V, @splat(0.5)), removegrainVector(15, V, grid, false));
             try testing.expectEqual(@as(V, @splat(0.5)), removegrainVector(16, V, grid, false));
             try testing.expectEqual(@as(V, @splat(0.25)), removegrainVector(17, V, grid, false));
+            const interpolation_grid = gridcmn.Grid(V){
+                .top_left = @as(V, .{ 1, 1, 1, 1 }),
+                .top_center = @as(V, .{ 1, 1, 1, 1 }),
+                .top_right = @as(V, .{ 1, 1, 1, 1 }),
+                .center_left = @as(V, @splat(0)),
+                .center_center = @as(V, @splat(0)),
+                .center_right = @as(V, @splat(0)),
+                .bottom_left = @as(V, .{ 100, 100, 3, 100 }),
+                .bottom_center = @as(V, .{ 100, 3, 100, 100 }),
+                .bottom_right = @as(V, .{ 3, 100, 100, 3 }),
+            };
+
+            try testing.expectEqual(@as(V, @splat(2)), removegrainVector(13, V, interpolation_grid, false));
+            try testing.expectEqual(@as(V, @splat(2)), removegrainVector(14, V, interpolation_grid, false));
+            try testing.expectEqual(@as(V, @splat(3)), removegrainVector(15, V, interpolation_grid, false));
+            try testing.expectEqual(@as(V, @splat(3)), removegrainVector(16, V, interpolation_grid, false));
         }
 
         fn processPlane(mode: u5, noalias srcp8: []const u8, noalias dstp8: []u8, width: usize, height: usize, stride8: usize, chroma: bool) void {
