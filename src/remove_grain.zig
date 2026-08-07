@@ -780,7 +780,7 @@ fn RemoveGrain(comptime T: type) type {
             return false;
         }
 
-        fn removegrainVector(mode: comptime_int, comptime V: type, grid: gridcmn.Grid(V)) V {
+        fn removegrainVector(mode: comptime_int, comptime V: type, grid: gridcmn.Grid(V), chroma: bool) V {
             const SATV = types.SignedArithmeticType(V);
             const UATV = types.UnsignedArithmeticType(V);
 
@@ -809,6 +809,96 @@ fn RemoveGrain(comptime T: type) type {
                     const c3_result = @select(T, mindiff == c3, clamp3, clamp1);
                     const c2_result = @select(T, mindiff == c2, clamp2, c3_result);
                     break :blk @select(T, mindiff == c4, clamp4, c2_result);
+                },
+                6 => blk: {
+                    const sorted = grid.minMaxOppositesWithoutCenter();
+                    const d1 = @as(SATV, sorted.max1) - @as(SATV, sorted.min1);
+                    const d2 = @as(SATV, sorted.max2) - @as(SATV, sorted.min2);
+                    const d3 = @as(SATV, sorted.max3) - @as(SATV, sorted.min3);
+                    const d4 = @as(SATV, sorted.max4) - @as(SATV, sorted.min4);
+                    const clamp1 = math.clamp(grid.center_center, sorted.min1, sorted.max1);
+                    const clamp2 = math.clamp(grid.center_center, sorted.min2, sorted.max2);
+                    const clamp3 = math.clamp(grid.center_center, sorted.min3, sorted.max3);
+                    const clamp4 = math.clamp(grid.center_center, sorted.min4, sorted.max4);
+                    const cT = @as(SATV, grid.center_center);
+                    const ratio: SATV = @splat(2);
+                    const maximum_chroma = @as(SATV, types.getTypeMaximum(V, true));
+                    const maximum_no_chroma = @as(SATV, types.getTypeMaximum(V, false));
+                    const maximum = if (chroma) maximum_chroma else maximum_no_chroma;
+                    const c1 = @min((math.lossyCast(SATV, @abs(cT - @as(SATV, clamp1))) * ratio) + d1, maximum);
+                    const c2 = @min((math.lossyCast(SATV, @abs(cT - @as(SATV, clamp2))) * ratio) + d2, maximum);
+                    const c3 = @min((math.lossyCast(SATV, @abs(cT - @as(SATV, clamp3))) * ratio) + d3, maximum);
+                    const c4 = @min((math.lossyCast(SATV, @abs(cT - @as(SATV, clamp4))) * ratio) + d4, maximum);
+                    const mindiff = @min(c1, c2, c3, c4);
+
+                    const c3_result = @select(T, mindiff == c3, clamp3, clamp1);
+                    const c2_result = @select(T, mindiff == c2, clamp2, c3_result);
+                    break :blk @select(T, mindiff == c4, clamp4, c2_result);
+                },
+                7 => blk: {
+                    const sorted = grid.minMaxOppositesWithoutCenter();
+                    const d1 = @as(SATV, sorted.max1) - @as(SATV, sorted.min1);
+                    const d2 = @as(SATV, sorted.max2) - @as(SATV, sorted.min2);
+                    const d3 = @as(SATV, sorted.max3) - @as(SATV, sorted.min3);
+                    const d4 = @as(SATV, sorted.max4) - @as(SATV, sorted.min4);
+                    const clamp1 = math.clamp(grid.center_center, sorted.min1, sorted.max1);
+                    const clamp2 = math.clamp(grid.center_center, sorted.min2, sorted.max2);
+                    const clamp3 = math.clamp(grid.center_center, sorted.min3, sorted.max3);
+                    const clamp4 = math.clamp(grid.center_center, sorted.min4, sorted.max4);
+                    const cT = @as(SATV, grid.center_center);
+                    const c1 = math.lossyCast(SATV, @abs(cT - @as(SATV, clamp1))) + d1;
+                    const c2 = math.lossyCast(SATV, @abs(cT - @as(SATV, clamp2))) + d2;
+                    const c3 = math.lossyCast(SATV, @abs(cT - @as(SATV, clamp3))) + d3;
+                    const c4 = math.lossyCast(SATV, @abs(cT - @as(SATV, clamp4))) + d4;
+                    const mindiff = @min(c1, c2, c3, c4);
+
+                    const c3_result = @select(T, mindiff == c3, clamp3, clamp1);
+                    const c2_result = @select(T, mindiff == c2, clamp2, c3_result);
+                    break :blk @select(T, mindiff == c4, clamp4, c2_result);
+                },
+                8 => blk: {
+                    const sorted = grid.minMaxOppositesWithoutCenter();
+                    const d1 = @as(SATV, sorted.max1) - @as(SATV, sorted.min1);
+                    const d2 = @as(SATV, sorted.max2) - @as(SATV, sorted.min2);
+                    const d3 = @as(SATV, sorted.max3) - @as(SATV, sorted.min3);
+                    const d4 = @as(SATV, sorted.max4) - @as(SATV, sorted.min4);
+                    const clamp1 = math.clamp(grid.center_center, sorted.min1, sorted.max1);
+                    const clamp2 = math.clamp(grid.center_center, sorted.min2, sorted.max2);
+                    const clamp3 = math.clamp(grid.center_center, sorted.min3, sorted.max3);
+                    const clamp4 = math.clamp(grid.center_center, sorted.min4, sorted.max4);
+                    const cT = @as(SATV, grid.center_center);
+                    const ratio: SATV = @splat(2);
+                    const minimum_chroma = @as(SATV, types.getTypeMinimum(V, true));
+                    const minimum_no_chroma = @as(SATV, types.getTypeMinimum(V, false));
+                    const maximum_chroma = @as(SATV, types.getTypeMaximum(V, true));
+                    const maximum_no_chroma = @as(SATV, types.getTypeMaximum(V, false));
+                    const minimum = if (chroma) minimum_chroma else minimum_no_chroma;
+                    const maximum = if (chroma) maximum_chroma else maximum_no_chroma;
+                    const c1 = math.clamp(math.lossyCast(SATV, @abs(cT - @as(SATV, clamp1))) + (d1 * ratio), minimum, maximum);
+                    const c2 = math.clamp(math.lossyCast(SATV, @abs(cT - @as(SATV, clamp2))) + (d2 * ratio), minimum, maximum);
+                    const c3 = math.clamp(math.lossyCast(SATV, @abs(cT - @as(SATV, clamp3))) + (d3 * ratio), minimum, maximum);
+                    const c4 = math.clamp(math.lossyCast(SATV, @abs(cT - @as(SATV, clamp4))) + (d4 * ratio), minimum, maximum);
+                    const mindiff = @min(c1, c2, c3, c4);
+
+                    const c3_result = @select(T, mindiff == c3, clamp3, clamp1);
+                    const c2_result = @select(T, mindiff == c2, clamp2, c3_result);
+                    break :blk @select(T, mindiff == c4, clamp4, c2_result);
+                },
+                9 => blk: {
+                    const sorted = grid.minMaxOppositesWithoutCenter();
+                    const d1 = @as(SATV, sorted.max1) - @as(SATV, sorted.min1);
+                    const d2 = @as(SATV, sorted.max2) - @as(SATV, sorted.min2);
+                    const d3 = @as(SATV, sorted.max3) - @as(SATV, sorted.min3);
+                    const d4 = @as(SATV, sorted.max4) - @as(SATV, sorted.min4);
+                    const mindiff = @min(d1, d2, d3, d4);
+                    const clamp1 = math.clamp(grid.center_center, sorted.min1, sorted.max1);
+                    const clamp2 = math.clamp(grid.center_center, sorted.min2, sorted.max2);
+                    const clamp3 = math.clamp(grid.center_center, sorted.min3, sorted.max3);
+                    const clamp4 = math.clamp(grid.center_center, sorted.min4, sorted.max4);
+
+                    const c3_result = @select(T, mindiff == d3, clamp3, clamp1);
+                    const c2_result = @select(T, mindiff == d2, clamp2, c3_result);
+                    break :blk @select(T, mindiff == d4, clamp4, c2_result);
                 },
                 13, 14 => blk: {
                     const d1 = @abs(@as(SATV, grid.top_left) - @as(SATV, grid.bottom_right));
@@ -884,7 +974,7 @@ fn RemoveGrain(comptime T: type) type {
             while (column + vector_len <= width - 1) : (column += vector_len) {
                 const top_left = ((row - 1) * stride) + column - 1;
                 const grid = gridcmn.Grid(V).init(T, srcp[top_left..], math.lossyCast(u32, stride));
-                vec.store(V, dstp, row_start + column, removegrainVector(mode, V, grid));
+                vec.store(V, dstp, row_start + column, removegrainVector(mode, V, grid, chroma));
             }
             for (column..width - 1) |tail_column| {
                 const top_left = ((row - 1) * stride) + tail_column - 1;
@@ -987,7 +1077,7 @@ fn RemoveGrain(comptime T: type) type {
                 }
             }
 
-            inline for ([_]comptime_int{ 1, 2, 3, 4, 5, 17 }) |mode| {
+            inline for ([_]comptime_int{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 17 }) |mode| {
                 @memset(scalar, 0);
                 @memset(simd, 0);
                 processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
@@ -1009,7 +1099,7 @@ fn RemoveGrain(comptime T: type) type {
                 }
             }
         }
-        test "SIMD mode 5 preserves tie order" {
+        test "SIMD modes 5-9 preserve tie order" {
             if (comptime T == f16) return;
 
             const V = @Vector(4, T);
@@ -1025,7 +1115,11 @@ fn RemoveGrain(comptime T: type) type {
                 .bottom_right = @as(V, .{ 4, 4, 4, 4 }),
             };
 
-            try testing.expectEqual(@as(V, .{ 6, 6, 4, 4 }), removegrainVector(5, V, grid));
+            try testing.expectEqual(@as(V, .{ 6, 6, 4, 4 }), removegrainVector(5, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 6, 6, 4, 4 }), removegrainVector(6, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 6, 6, 4, 4 }), removegrainVector(7, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 6, 7, 7, 7 }), removegrainVector(8, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 6, 7, 7, 7 }), removegrainVector(9, V, grid, false));
         }
 
 
@@ -1035,7 +1129,7 @@ fn RemoveGrain(comptime T: type) type {
             const dstp: []T = @ptrCast(@alignCast(dstp8));
 
             switch (mode) {
-                inline 1...5, 17 => |m| if (comptime T == f16)
+                inline 1...9, 17 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
@@ -1043,7 +1137,7 @@ fn RemoveGrain(comptime T: type) type {
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVectorInterlaced(m, srcp, dstp, width, height, stride, chroma),
-                inline 6...12, 18...24 => |m| processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
+                inline 10...12, 18...24 => |m| processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
                 else => unreachable,
             }
         }
