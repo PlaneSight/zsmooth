@@ -940,12 +940,88 @@ fn Repair(comptime T: type) type {
                     const d8_result = @select(T, mindiff == d8, grid.bottom_right, d6_result);
                     break :blk @select(T, mindiff == d7, grid.bottom_center, d8_result);
                 },
-                12 => blk: {
+                12, 13, 14 => blk: {
                     var neighbours = grid.toArrayWithoutCenter();
                     sort.sort(V, &neighbours);
-                    const minimum = @min(neighbours[1], grid.center_center);
-                    const maximum = @max(neighbours[6], grid.center_center);
+                    const lower = if (mode == 12) 1 else if (mode == 13) 2 else 3;
+                    const upper = 7 - lower;
+                    const minimum = @min(neighbours[lower], grid.center_center);
+                    const maximum = @max(neighbours[upper], grid.center_center);
                     break :blk math.clamp(src, minimum, maximum);
+                },
+                15 => blk: {
+                    const sorted = grid.minMaxOppositesWithoutCenter();
+                    const center = grid.center_center;
+                    const centerT = @as(SATV, center);
+                    const clamp1 = math.clamp(center, sorted.min1, sorted.max1);
+                    const clamp2 = math.clamp(center, sorted.min2, sorted.max2);
+                    const clamp3 = math.clamp(center, sorted.min3, sorted.max3);
+                    const clamp4 = math.clamp(center, sorted.min4, sorted.max4);
+                    const c1 = @abs(centerT - @as(SATV, clamp1));
+                    const c2 = @abs(centerT - @as(SATV, clamp2));
+                    const c3 = @abs(centerT - @as(SATV, clamp3));
+                    const c4 = @abs(centerT - @as(SATV, clamp4));
+                    const mindiff = @min(c1, c2, c3, c4);
+                    const min3 = @select(T, mindiff == c3, sorted.min3, sorted.min1);
+                    const max3 = @select(T, mindiff == c3, sorted.max3, sorted.max1);
+                    const min2 = @select(T, mindiff == c2, sorted.min2, min3);
+                    const max2 = @select(T, mindiff == c2, sorted.max2, max3);
+                    const minimum = @select(T, mindiff == c4, sorted.min4, min2);
+                    const maximum = @select(T, mindiff == c4, sorted.max4, max2);
+                    break :blk math.clamp(src, @min(minimum, center), @max(maximum, center));
+                },
+                16 => blk: {
+                    const sorted = grid.minMaxOppositesWithoutCenter();
+                    const center = grid.center_center;
+                    const centerT = @as(SATV, center);
+                    const d1 = @as(SATV, sorted.max1) - @as(SATV, sorted.min1);
+                    const d2 = @as(SATV, sorted.max2) - @as(SATV, sorted.min2);
+                    const d3 = @as(SATV, sorted.max3) - @as(SATV, sorted.min3);
+                    const d4 = @as(SATV, sorted.max4) - @as(SATV, sorted.min4);
+                    const clamp1 = math.clamp(center, sorted.min1, sorted.max1);
+                    const clamp2 = math.clamp(center, sorted.min2, sorted.max2);
+                    const clamp3 = math.clamp(center, sorted.min3, sorted.max3);
+                    const clamp4 = math.clamp(center, sorted.min4, sorted.max4);
+                    const ratio: SATV = @splat(2);
+                    const minimum_chroma = @as(SATV, types.getTypeMinimum(V, true));
+                    const minimum_no_chroma = @as(SATV, types.getTypeMinimum(V, false));
+                    const maximum_chroma = @as(SATV, types.getTypeMaximum(V, true));
+                    const maximum_no_chroma = @as(SATV, types.getTypeMaximum(V, false));
+                    const minimum = if (chroma) minimum_chroma else minimum_no_chroma;
+                    const maximum = if (chroma) maximum_chroma else maximum_no_chroma;
+                    const c1 = math.clamp(math.lossyCast(SATV, @abs(centerT - @as(SATV, clamp1))) * ratio + d1, minimum, maximum);
+                    const c2 = math.clamp(math.lossyCast(SATV, @abs(centerT - @as(SATV, clamp2))) * ratio + d2, minimum, maximum);
+                    const c3 = math.clamp(math.lossyCast(SATV, @abs(centerT - @as(SATV, clamp3))) * ratio + d3, minimum, maximum);
+                    const c4 = math.clamp(math.lossyCast(SATV, @abs(centerT - @as(SATV, clamp4))) * ratio + d4, minimum, maximum);
+                    const mindiff = @min(c1, c2, c3, c4);
+                    const min3 = @select(T, mindiff == c3, sorted.min3, sorted.min1);
+                    const max3 = @select(T, mindiff == c3, sorted.max3, sorted.max1);
+                    const min2 = @select(T, mindiff == c2, sorted.min2, min3);
+                    const max2 = @select(T, mindiff == c2, sorted.max2, max3);
+                    const minimum_pair = @select(T, mindiff == c4, sorted.min4, min2);
+                    const maximum_pair = @select(T, mindiff == c4, sorted.max4, max2);
+                    break :blk math.clamp(src, @min(minimum_pair, center), @max(maximum_pair, center));
+                },
+                17 => blk: {
+                    const sorted = grid.minMaxOppositesWithoutCenter();
+                    const lower = @max(sorted.min1, sorted.min2, sorted.min3, sorted.min4);
+                    const upper = @min(sorted.max1, sorted.max2, sorted.max3, sorted.max4);
+                    break :blk math.clamp(src, @min(lower, upper, grid.center_center), @max(lower, upper, grid.center_center));
+                },
+                18 => blk: {
+                    const centerT = @as(SATV, grid.center_center);
+                    const d1 = @max(@abs(centerT - @as(SATV, grid.top_left)), @abs(centerT - @as(SATV, grid.bottom_right)));
+                    const d2 = @max(@abs(centerT - @as(SATV, grid.top_center)), @abs(centerT - @as(SATV, grid.bottom_center)));
+                    const d3 = @max(@abs(centerT - @as(SATV, grid.top_right)), @abs(centerT - @as(SATV, grid.bottom_left)));
+                    const d4 = @max(@abs(centerT - @as(SATV, grid.center_left)), @abs(centerT - @as(SATV, grid.center_right)));
+                    const mindiff = @min(d1, d2, d3, d4);
+                    const min3 = @select(T, mindiff == d3, @min(grid.top_right, grid.bottom_left), @min(grid.top_left, grid.bottom_right));
+                    const max3 = @select(T, mindiff == d3, @max(grid.top_right, grid.bottom_left), @max(grid.top_left, grid.bottom_right));
+                    const min2 = @select(T, mindiff == d2, @min(grid.top_center, grid.bottom_center), min3);
+                    const max2 = @select(T, mindiff == d2, @max(grid.top_center, grid.bottom_center), max3);
+                    const minimum = @select(T, mindiff == d4, @min(grid.center_left, grid.center_right), min2);
+                    const maximum = @select(T, mindiff == d4, @max(grid.center_left, grid.center_right), max2);
+                    break :blk math.clamp(src, @min(minimum, grid.center_center), @max(maximum, grid.center_center));
                 },
                 else => unreachable,
             };
@@ -1035,7 +1111,7 @@ fn Repair(comptime T: type) type {
                 dstp[offset] = repair(mode, src, grid, chroma);
             }
         }
-        test "SIMD Repair modes 1-12 match scalar reference" {
+        test "SIMD Repair modes 1-18 match scalar reference" {
             if (comptime T == f16) return;
 
             const width = vec.getVecSize(T) + 3;
@@ -1064,11 +1140,23 @@ fn Repair(comptime T: type) type {
                 }
             }
 
-            inline for ([_]comptime_int{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 }) |mode| {
+            inline for ([_]comptime_int{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18 }) |mode| {
                 @memset(scalar, 0);
                 @memset(simd, 0);
                 processPlaneScalar(mode, srcp, repairp, scalar, width, height, stride, false);
                 processPlaneVector(mode, false, srcp, repairp, simd, width, height, stride);
+                for (0..height) |row| {
+                    const row_start = row * stride;
+                    try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
+                }
+            }
+            @memset(srcp, types.getTypeMaximum(T, false));
+            @memset(repairp, types.getTypeMinimum(T, false));
+            inline for ([_]comptime_int{ 13, 14, 15, 16, 17, 18 }) |mode| {
+                @memset(scalar, 0);
+                @memset(simd, 0);
+                processPlaneScalar(mode, srcp, repairp, scalar, width, height, stride, true);
+                processPlaneVector(mode, true, srcp, repairp, simd, width, height, stride);
                 for (0..height) |row| {
                     const row_start = row * stride;
                     try testing.expectEqualSlices(T, scalar[row_start..][0..width], simd[row_start..][0..width]);
@@ -1094,7 +1182,11 @@ fn Repair(comptime T: type) type {
                     processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
-                inline 13...24 => |m| processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma),
+                inline 13...18 => |m| if (comptime T == f16)
+                    processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma)
+                else
+                    processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
+                inline 19...24 => |m| processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma),
                 else => unreachable,
             }
         }
