@@ -934,6 +934,109 @@ fn RemoveGrain(comptime T: type) type {
                     else
                         math.lossyCast(V, (sum + eight) / sixteen);
                 },
+                18 => blk: {
+                    const cT = @as(SATV, grid.center_center);
+                    const d1 = @max(math.lossyCast(SATV, @abs(cT - @as(SATV, grid.top_left))), math.lossyCast(SATV, @abs(cT - @as(SATV, grid.bottom_right))));
+                    const d2 = @max(math.lossyCast(SATV, @abs(cT - @as(SATV, grid.top_center))), math.lossyCast(SATV, @abs(cT - @as(SATV, grid.bottom_center))));
+                    const d3 = @max(math.lossyCast(SATV, @abs(cT - @as(SATV, grid.top_right))), math.lossyCast(SATV, @abs(cT - @as(SATV, grid.bottom_left))));
+                    const d4 = @max(math.lossyCast(SATV, @abs(cT - @as(SATV, grid.center_left))), math.lossyCast(SATV, @abs(cT - @as(SATV, grid.center_right))));
+                    const mindiff = @min(d1, d2, d3, d4);
+                    const result1 = math.clamp(grid.center_center, @min(grid.top_left, grid.bottom_right), @max(grid.top_left, grid.bottom_right));
+                    const result2 = math.clamp(grid.center_center, @min(grid.top_center, grid.bottom_center), @max(grid.top_center, grid.bottom_center));
+                    const result3 = math.clamp(grid.center_center, @min(grid.top_right, grid.bottom_left), @max(grid.top_right, grid.bottom_left));
+                    const result4 = math.clamp(grid.center_center, @min(grid.center_left, grid.center_right), @max(grid.center_left, grid.center_right));
+
+                    const d3_result = @select(T, mindiff == d3, result3, result1);
+                    const d2_result = @select(T, mindiff == d2, result2, d3_result);
+                    break :blk @select(T, mindiff == d4, result4, d2_result);
+                },
+                19 => blk: {
+                    const eight: UATV = @splat(8);
+                    const four: UATV = @splat(4);
+                    const sum = @as(UATV, grid.top_left) + @as(UATV, grid.top_center) + @as(UATV, grid.top_right) +
+                        @as(UATV, grid.center_left) + @as(UATV, grid.center_right) +
+                        @as(UATV, grid.bottom_left) + @as(UATV, grid.bottom_center) + @as(UATV, grid.bottom_right);
+                    break :blk if (types.isFloat(T))
+                        sum / eight
+                    else
+                        math.lossyCast(V, (sum + four) / eight);
+                },
+                20 => blk: {
+                    const nine: UATV = @splat(9);
+                    const four: UATV = @splat(4);
+                    const sum = @as(UATV, grid.top_left) + @as(UATV, grid.top_center) + @as(UATV, grid.top_right) +
+                        @as(UATV, grid.center_left) + @as(UATV, grid.center_center) + @as(UATV, grid.center_right) +
+                        @as(UATV, grid.bottom_left) + @as(UATV, grid.bottom_center) + @as(UATV, grid.bottom_right);
+                    break :blk if (types.isFloat(T))
+                        sum / nine
+                    else
+                        math.lossyCast(V, (sum + four) / nine);
+                },
+                21, 22 => blk: {
+                    const one: UATV = @splat(1);
+                    const two: UATV = @splat(2);
+                    const l1l = (@as(UATV, grid.top_left) + @as(UATV, grid.bottom_right)) / two;
+                    const l2l = (@as(UATV, grid.top_center) + @as(UATV, grid.bottom_center)) / two;
+                    const l3l = (@as(UATV, grid.top_right) + @as(UATV, grid.bottom_left)) / two;
+                    const l4l = (@as(UATV, grid.center_left) + @as(UATV, grid.center_right)) / two;
+                    const l1h = if (types.isInt(T)) (@as(UATV, grid.top_left) + @as(UATV, grid.bottom_right) + one) / two else l1l;
+                    const l2h = if (types.isInt(T)) (@as(UATV, grid.top_center) + @as(UATV, grid.bottom_center) + one) / two else l2l;
+                    const l3h = if (types.isInt(T)) (@as(UATV, grid.top_right) + @as(UATV, grid.bottom_left) + one) / two else l3l;
+                    const l4h = if (types.isInt(T)) (@as(UATV, grid.center_left) + @as(UATV, grid.center_right) + one) / two else l4l;
+                    const minimum = if (mode == 22) @min(l1h, l2h, l3h, l4h) else @min(l1l, l2l, l3l, l4l);
+                    const maximum = @max(l1h, l2h, l3h, l4h);
+                    const minimum_t = math.lossyCast(V, minimum);
+                    const maximum_t = math.lossyCast(V, maximum);
+                    break :blk math.clamp(grid.center_center, minimum_t, maximum_t);
+                },
+                23 => blk: {
+                    const sorted = grid.minMaxOppositesWithoutCenter();
+                    const linediff1 = @as(SATV, sorted.max1) - @as(SATV, sorted.min1);
+                    const linediff2 = @as(SATV, sorted.max2) - @as(SATV, sorted.min2);
+                    const linediff3 = @as(SATV, sorted.max3) - @as(SATV, sorted.min3);
+                    const linediff4 = @as(SATV, sorted.max4) - @as(SATV, sorted.min4);
+                    const cT = @as(SATV, grid.center_center);
+                    const h1 = @min(cT - @as(SATV, sorted.max1), linediff1);
+                    const h2 = @min(cT - @as(SATV, sorted.max2), linediff2);
+                    const h3 = @min(cT - @as(SATV, sorted.max3), linediff3);
+                    const h4 = @min(cT - @as(SATV, sorted.max4), linediff4);
+                    const zero: SATV = @splat(0);
+                    const h = @max(zero, h1, h2, h3, h4);
+                    const l1 = @min(@as(SATV, sorted.min1) - cT, linediff1);
+                    const l2 = @min(@as(SATV, sorted.min2) - cT, linediff2);
+                    const l3 = @min(@as(SATV, sorted.min3) - cT, linediff3);
+                    const l4 = @min(@as(SATV, sorted.min4) - cT, linediff4);
+                    const l = @max(zero, l1, l2, l3, l4);
+                    break :blk math.lossyCast(V, cT - h + l);
+                },
+                24 => blk: {
+                    const sorted = grid.minMaxOppositesWithoutCenter();
+                    const linediff1 = @as(SATV, sorted.max1) - @as(SATV, sorted.min1);
+                    const linediff2 = @as(SATV, sorted.max2) - @as(SATV, sorted.min2);
+                    const linediff3 = @as(SATV, sorted.max3) - @as(SATV, sorted.min3);
+                    const linediff4 = @as(SATV, sorted.max4) - @as(SATV, sorted.min4);
+                    const cT = @as(SATV, grid.center_center);
+                    const th1 = cT - @as(SATV, sorted.max1);
+                    const th2 = cT - @as(SATV, sorted.max2);
+                    const th3 = cT - @as(SATV, sorted.max3);
+                    const th4 = cT - @as(SATV, sorted.max4);
+                    const h1 = @min(th1, linediff1 - th1);
+                    const h2 = @min(th2, linediff2 - th2);
+                    const h3 = @min(th3, linediff3 - th3);
+                    const h4 = @min(th4, linediff4 - th4);
+                    const zero: SATV = @splat(0);
+                    const h = @max(zero, h1, h2, h3, h4);
+                    const tl1 = @as(SATV, sorted.min1) - cT;
+                    const tl2 = @as(SATV, sorted.min2) - cT;
+                    const tl3 = @as(SATV, sorted.min3) - cT;
+                    const tl4 = @as(SATV, sorted.min4) - cT;
+                    const l1 = @min(tl1, linediff1 - tl1);
+                    const l2 = @min(tl2, linediff2 - tl2);
+                    const l3 = @min(tl3, linediff3 - tl3);
+                    const l4 = @min(tl4, linediff4 - tl4);
+                    const l = @max(zero, l1, l2, l3, l4);
+                    break :blk math.lossyCast(V, cT - h + l);
+                },
                 13, 14 => blk: {
                     const d1 = @abs(@as(SATV, grid.top_left) - @as(SATV, grid.bottom_right));
                     const d2 = @abs(@as(SATV, grid.top_center) - @as(SATV, grid.bottom_center));
@@ -1111,7 +1214,7 @@ fn RemoveGrain(comptime T: type) type {
                 }
             }
 
-            inline for ([_]comptime_int{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 17 }) |mode| {
+            inline for ([_]comptime_int{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23, 24 }) |mode| {
                 @memset(scalar, 0);
                 @memset(simd, 0);
                 processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
@@ -1133,7 +1236,7 @@ fn RemoveGrain(comptime T: type) type {
                 }
             }
         }
-        test "SIMD modes 5-12 preserve tie order" {
+        test "SIMD modes 5-24 preserve tie order" {
             if (comptime T == f16) return;
 
             const V = @Vector(4, T);
@@ -1158,6 +1261,13 @@ fn RemoveGrain(comptime T: type) type {
             const weighted_expected: T = if (types.isFloat(T)) 5.75 else 6;
             try testing.expectEqual(@as(V, @splat(weighted_expected)), removegrainVector(11, V, grid, false));
             try testing.expectEqual(@as(V, @splat(weighted_expected)), removegrainVector(12, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 6, 6, 6, 6 }), removegrainVector(18, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(19, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(20, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(21, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(22, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(23, V, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), removegrainVector(24, V, grid, false));
         }
 
 
@@ -1175,7 +1285,10 @@ fn RemoveGrain(comptime T: type) type {
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVectorInterlaced(m, srcp, dstp, width, height, stride, chroma),
-                inline 18...24 => |m| processPlaneScalar(m, srcp, dstp, width, height, stride, chroma),
+                inline 18...24 => |m| if (comptime T == f16)
+                    processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
+                else
+                    processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
                 else => unreachable,
             }
         }
