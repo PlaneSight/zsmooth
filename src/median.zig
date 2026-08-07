@@ -159,7 +159,8 @@ fn Median(comptime T: type) type {
             }
         }
         test "vector median matches scalar for strided tail widths" {
-            const widths = [_]usize{ vector_len, vector_len + 1, vector_len * 2 - 1, vector_len * 2 + 3 };
+            const min_width = @max(vector_len, MAX_RADIUS * 2 + 1);
+            const widths = [_]usize{ min_width, min_width + 1, vector_len * 2 + 3, vector_len * 2 + 5 };
 
             inline for ([_]comptime_int{ 1, 2, 3 }) |radius| {
                 for (widths) |width| {
