@@ -393,6 +393,35 @@ fn DegrainMedian(comptime T: type) type {
             return limitPixelCorrection(current.center_center, result, limit, pixel_min, pixel_max);
         }
 
+        fn processPixelScalar(comptime mode: u8, interlaced: bool, comptime norow: bool, srcp: [3][]const T, current_pixel: usize, stride: u32, limit: T, pixel_min: T, pixel_max: T) T {
+            const stride_usize: usize = @intCast(stride);
+            const offset = if (interlaced)
+                current_pixel - (stride_usize * 2) - 1
+            else
+                current_pixel - stride_usize - 1;
+
+            const prev = if (interlaced)
+                GridS.initInterlaced(T, srcp[0][offset..], stride)
+            else
+                GridS.init(T, srcp[0][offset..], stride);
+
+            const current = if (interlaced)
+                GridS.initInterlaced(T, srcp[1][offset..], stride)
+            else
+                GridS.init(T, srcp[1][offset..], stride);
+
+            const next = if (interlaced)
+                GridS.initInterlaced(T, srcp[2][offset..], stride)
+            else
+                GridS.init(T, srcp[2][offset..], stride);
+
+            return switch (mode) {
+                0 => mode0(norow, prev, current, next, limit, pixel_min, pixel_max),
+                1...5 => |m| mode1to5(m, norow, prev, current, next, limit, pixel_min, pixel_max),
+                else => unreachable,
+            };
+        }
+
         fn processPlaneScalar(comptime mode: u8, interlaced: bool, comptime norow: bool, srcp: [3][]const T, noalias dstp: []T, width: u32, height: u32, stride: u32, limit: T, pixel_min: T, pixel_max: T) void {
             const skip_rows = @as(u8, 1) << @intFromBool(interlaced);
 
@@ -412,38 +441,17 @@ fn DegrainMedian(comptime T: type) type {
 
                 for (1..width - 1) |column| {
                     const current_pixel = row * stride + column;
-                    // We're loading pixels from the top left of a 3x3 grid centered around
-                    // the current pixel of interest.
-                    //
-                    // So we subtract the stride from the current pixel location to get the row
-                    // above, and then subtract 1 to get the pixel in the top left, instead of the top center.
-                    //
-                    // All of this is to make loading from Grid.init easier.
-                    const offset = if (interlaced)
-                        current_pixel - (stride * 2) - 1
-                    else
-                        current_pixel - stride - 1;
-
-                    const prev = if (interlaced)
-                        GridS.initInterlaced(T, srcp[0][offset..], stride)
-                    else
-                        GridS.init(T, srcp[0][offset..], stride);
-
-                    const current = if (interlaced)
-                        GridS.initInterlaced(T, srcp[1][offset..], stride)
-                    else
-                        GridS.init(T, srcp[1][offset..], stride);
-
-                    const next = if (interlaced)
-                        GridS.initInterlaced(T, srcp[2][offset..], stride)
-                    else
-                        GridS.init(T, srcp[2][offset..], stride);
-
-                    dstp[current_pixel] = switch (mode) {
-                        0 => mode0(norow, prev, current, next, limit, pixel_min, pixel_max),
-                        1...5 => |m| mode1to5(m, norow, prev, current, next, limit, pixel_min, pixel_max),
-                        else => unreachable,
-                    };
+                    dstp[current_pixel] = processPixelScalar(
+                        mode,
+                        interlaced,
+                        norow,
+                        srcp,
+                        @intCast(current_pixel),
+                        @intCast(stride),
+                        limit,
+                        pixel_min,
+                        pixel_max,
+                    );
                 }
 
                 // Copy the pixel at the end of the line.
@@ -468,7 +476,9 @@ fn DegrainMedian(comptime T: type) type {
             // So we take into account the size of vector and the size of the grid we
             // need to load, and work backwards (subtract) from the overall frame size
             // to calculate a safe width.
-            const width_simd = (width - grid_radius) / vector_len * vector_len;
+            const width_usize: usize = @intCast(width);
+            const interior_width = if (width_usize > 2 * grid_radius) width_usize - 2 * grid_radius else 0;
+            const width_simd = interior_width / vector_len * vector_len;
 
             const limit: VT = @splat(_limit);
             const pixel_min: VT = @splat(_pixel_min);
@@ -491,7 +501,7 @@ fn DegrainMedian(comptime T: type) type {
                 dstp[(row * stride)] = srcp[1][(row * stride)];
 
                 var column: usize = 1;
-                while (column < width_simd) : (column += vector_len) {
+                while (column < 1 + width_simd) : (column += vector_len) {
                     const current_pixel = row * stride + column;
                     // Target the offset at the pixel in the top left;
                     const grid_offset = if (interlaced)
@@ -523,38 +533,19 @@ fn DegrainMedian(comptime T: type) type {
                     vec.store(VT, dstp, current_pixel, result);
                 }
 
-                // If the video width is not perfectly aligned with the vector width, do one
-                // last operation at the end of the plane to cover what's leftover from the loop above.
-                if (width_simd < width) {
-                    const current_pixel = row * stride + width - vector_len - grid_radius;
-                    // Target the offset at the pixel in the top left;
-                    const grid_offset = if (interlaced)
-                        current_pixel - (stride * 2) - 1
-                    else
-                        current_pixel - stride - 1;
-
-                    const prev = if (interlaced)
-                        GridV.initInterlaced(T, srcp[0][grid_offset..], stride)
-                    else
-                        GridV.init(T, srcp[0][grid_offset..], stride);
-
-                    const current = if (interlaced)
-                        GridV.initInterlaced(T, srcp[1][grid_offset..], stride)
-                    else
-                        GridV.init(T, srcp[1][grid_offset..], stride);
-
-                    const next = if (interlaced)
-                        GridV.initInterlaced(T, srcp[2][grid_offset..], stride)
-                    else
-                        GridV.init(T, srcp[2][grid_offset..], stride);
-
-                    const result = switch (mode) {
-                        0 => mode0(norow, prev, current, next, limit, pixel_min, pixel_max),
-                        1...5 => |m| mode1to5(m, norow, prev, current, next, limit, pixel_min, pixel_max),
-                        else => unreachable,
-                    };
-
-                    vec.store(VT, dstp, current_pixel, result);
+                for (1 + width_simd..width_usize - 1) |tail_column| {
+                    const current_pixel = row * stride + tail_column;
+                    dstp[current_pixel] = processPixelScalar(
+                        mode,
+                        interlaced,
+                        norow,
+                        srcp,
+                        current_pixel,
+                        stride,
+                        _limit,
+                        _pixel_min,
+                        _pixel_max,
+                    );
                 }
 
                 // Copy the pixel at the end of the line.
@@ -582,6 +573,77 @@ fn DegrainMedian(comptime T: type) type {
                 .processPlane(srcp, dstp, width, height, stride, limit, pixel_min, pixel_max, interlaced);
         }
     };
+}
+
+test "DegrainMedian vector tails match scalar reference" {
+    const T = u8;
+    const operation = DegrainMedian(T);
+    const vector_len = vec.getVecSize(T);
+    const widths = [_]usize{
+        vector_len,
+        vector_len + 1,
+        vector_len * 2 - 1,
+        vector_len * 2 + 3,
+    };
+
+    inline for (0..6) |mode| {
+        inline for ([_]bool{ false, true }) |norow| {
+            inline for ([_]bool{ false, true }) |interlaced| {
+                const height: usize = if (interlaced) 8 else 6;
+
+                for (widths) |width| {
+                    const stride = (width + vector_len - 1) / vector_len * vector_len;
+                    const size = height * stride;
+                    var src_planes: [3][]u8 = undefined;
+                    const scalar_dst = try testingAllocator.alloc(T, size);
+                    defer testingAllocator.free(scalar_dst);
+                    const vector_dst = try testingAllocator.alloc(T, size);
+                    defer testingAllocator.free(vector_dst);
+
+                    for (0..3) |plane| {
+                        src_planes[plane] = try testingAllocator.alloc(T, size);
+                        defer testingAllocator.free(src_planes[plane]);
+                        for (src_planes[plane], 0..) |*pixel, index| {
+                            pixel.* = @intCast((plane * 37 + index * 13 + index / stride * 7) % 251);
+                        }
+                    }
+
+                    const src: [3][]const T = .{ src_planes[0], src_planes[1], src_planes[2] };
+                    @memset(scalar_dst, 0xa5);
+                    @memset(vector_dst, 0xa5);
+
+                    operation.processPlaneScalar(
+                        mode,
+                        interlaced,
+                        norow,
+                        src,
+                        scalar_dst,
+                        @intCast(width),
+                        @intCast(height),
+                        @intCast(stride),
+                        17,
+                        0,
+                        255,
+                    );
+                    operation.processPlaneVector(
+                        mode,
+                        interlaced,
+                        norow,
+                        src,
+                        vector_dst,
+                        @intCast(width),
+                        @intCast(height),
+                        @intCast(stride),
+                        17,
+                        0,
+                        255,
+                    );
+
+                    try testing.expectEqualSlices(T, scalar_dst, vector_dst);
+                }
+            }
+        }
+    }
 }
 
 fn degrainMedianGetFrame(n: c_int, activation_reason: ar, instance_data: ?*anyopaque, frame_data: ?*?*anyopaque, frame_ctx: ?*vs.FrameContext, core: ?*vs.Core, vsapi: ?*const vs.API) callconv(.c) ?*const vs.Frame {
