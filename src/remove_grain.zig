@@ -1217,7 +1217,7 @@ fn RemoveGrain(comptime T: type) type {
                         pixel.* = @floatFromInt((i * 37) % 251);
                     }
 
-                    inline for ([_]comptime_int{ 1, 2, 3, 4 }) |mode| {
+                    inline for ([_]comptime_int{ 1, 2, 3, 4, 17 }) |mode| {
                         @memset(scalar, 0);
                         @memset(simd, 0);
                         processPlaneScalar(mode, srcp, scalar, width, height, stride, false);
@@ -1337,7 +1337,7 @@ fn RemoveGrain(comptime T: type) type {
             try testing.expectEqual(@as(V, .{ 5, 5, 5, 7 }), removegrainVector(4, V, grid, false));
         }
 
-        test "FP16 SIMD modes 13-16 preserve tie order" {
+        test "FP16 SIMD modes 13-17 preserve bounds" {
             if (comptime T != f16) return;
 
             const V = @Vector(4, T);
@@ -1357,6 +1357,7 @@ fn RemoveGrain(comptime T: type) type {
             try testing.expectEqual(@as(V, @splat(0.5)), removegrainVector(14, V, grid, false));
             try testing.expectEqual(@as(V, @splat(0.5)), removegrainVector(15, V, grid, false));
             try testing.expectEqual(@as(V, @splat(0.5)), removegrainVector(16, V, grid, false));
+            try testing.expectEqual(@as(V, @splat(0.25)), removegrainVector(17, V, grid, false));
         }
 
         fn processPlane(mode: u5, noalias srcp8: []const u8, noalias dstp8: []u8, width: usize, height: usize, stride8: usize, chroma: bool) void {
@@ -1366,10 +1367,11 @@ fn RemoveGrain(comptime T: type) type {
 
             switch (mode) {
                 inline 1...4 => |m| processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
-                inline 5...12, 17 => |m| if (comptime T == f16)
+                inline 5...12 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, srcp, dstp, width, height, stride, chroma),
+                17 => processPlaneVector(17, srcp, dstp, width, height, stride, chroma),
                 inline 13...16 => |m| processPlaneVectorInterlaced(m, srcp, dstp, width, height, stride, chroma),
                 inline 18...24 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, dstp, width, height, stride, chroma)
