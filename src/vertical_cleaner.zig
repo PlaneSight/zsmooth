@@ -9,6 +9,7 @@ const types = @import("common/type.zig");
 const vscmn = @import("common/vapoursynth.zig");
 const sort = @import("common/sorting_networks.zig");
 const vec = @import("common/vector.zig");
+const f16cmn = @import("common/f16.zig");
 const float_mode: std.builtin.FloatMode = if (@import("config").optimize_float) .optimized else .strict;
 
 const vs = vapoursynth.vapoursynth4;
@@ -64,7 +65,15 @@ fn VerticalCleaner(comptime T: type) type {
             copy.copyFirstNLines(T, dstp, srcp, width, stride, 1);
 
             if (comptime T == f16) {
-                verticalMedianF16(srcp, dstp, width, height, stride);
+                const use_native = switch (@import("config").f16_simd) {
+                    .auto => f16cmn.target_has_native_fp16_arithmetic,
+                    .native => true,
+                    .scalar, .widened => false,
+                };
+                if (use_native)
+                    verticalMedianF16Native(srcp, dstp, width, height, stride)
+                else
+                    verticalMedianF16(srcp, dstp, width, height, stride);
             } else {
                 const V = @Vector(vec.getVecSize(T), T);
                 const vector_len = @typeInfo(V).vector.len;
@@ -100,6 +109,26 @@ fn VerticalCleaner(comptime T: type) type {
                     const center: V32 = vec.loadF16AsF32(V16, V32, srcp, row_start + column);
                     const bottom: V32 = vec.loadF16AsF32(V16, V32, srcp, row_start + stride + column);
                     vec.storeF32AsF16(V16, dstp, row_start + column, sort.median3(top, center, bottom));
+                }
+                for (column..width) |tail_column| {
+                    const offset = row_start + tail_column;
+                    dstp[offset] = sort.median3(srcp[offset - stride], srcp[offset], srcp[offset + stride]);
+                }
+            }
+        }
+
+        fn verticalMedianF16Native(noalias srcp: []const f16, noalias dstp: []f16, width: usize, height: usize, stride: usize) void {
+            const V = @Vector(vec.getVecSize(f16), f16);
+            const vector_len = @typeInfo(V).vector.len;
+
+            for (1..height - 1) |row| {
+                const row_start = row * stride;
+                var column: usize = 0;
+                while (column + vector_len <= width) : (column += vector_len) {
+                    const top = vec.load(V, srcp, row_start - stride + column);
+                    const center = vec.load(V, srcp, row_start + column);
+                    const bottom = vec.load(V, srcp, row_start + stride + column);
+                    vec.store(V, dstp, row_start + column, sort.median3(top, center, bottom));
                 }
                 for (column..width) |tail_column| {
                     const offset = row_start + tail_column;
