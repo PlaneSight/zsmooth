@@ -14,11 +14,8 @@ pub fn loadAt(comptime VT: type, src: []const @typeInfo(VT).vector.child, row: u
 }
 
 /// Stores vector data into memory at a given offset.
-pub fn store(comptime VT: type, _dst: []@typeInfo(VT).vector.child, offset: usize, result: VT) void {
-    var dst: []@typeInfo(VT).vector.child = @ptrCast(@alignCast(_dst));
-    inline for (dst[offset..][0..@typeInfo(VT).vector.len], 0..) |*d, i| {
-        d.* = result[i];
-    }
+pub fn store(comptime VT: type, dst: []@typeInfo(VT).vector.child, offset: usize, result: VT) void {
+    dst[offset..][0..@typeInfo(VT).vector.len].* = result;
 }
 
 /// Stores a vector of type VT into dst starting at the given row and column.
