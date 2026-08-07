@@ -331,17 +331,15 @@ fn Cnr4(comptime T: type) type {
             const divisor = @as(VBUAT, max) * (@as(VT, @splat(radius)) * two);
             const round2 = divisor / two;
 
+            const VF = @Vector(vector_len, f32);
+            const curr_u: VT = vec.load(VT, curr[1], uv_index);
+            const curr_v: VT = vec.load(VT, curr[2], uv_index);
+            const curr_ref_y: VT = vec.load(VT, curr_ref[0], y_index);
+            const curr_ref_u: VT = vec.load(VT, curr_ref[1], uv_index);
+            const curr_ref_v: VT = vec.load(VT, curr_ref[2], uv_index);
+
             for (0..radius * 2, src, ref, temporal_weights) |i, other, other_ref, _tweight| {
-                const VF = @Vector(vector_len, f32);
                 const tweight: VF = @splat(_tweight);
-
-                const curr_u: VT = vec.load(VT, curr[1], uv_index);
-                const curr_v: VT = vec.load(VT, curr[2], uv_index);
-
-                const curr_ref_y: VT = vec.load(VT, curr_ref[0], y_index);
-                const curr_ref_u: VT = vec.load(VT, curr_ref[1], uv_index);
-                const curr_ref_v: VT = vec.load(VT, curr_ref[2], uv_index);
-
                 const other_u: VT = vec.load(VT, other[1], uv_index);
                 const other_v: VT = vec.load(VT, other[2], uv_index);
 
@@ -425,6 +423,96 @@ fn Cnr4(comptime T: type) type {
 
                     vec.store(VT, dst_u, uv_index, result_u);
                     vec.store(VT, dst_v, uv_index, result_v);
+                }
+            }
+        }
+        test "CNR4 vector output matches scalar across radii" {
+            const width = vector_len + 3;
+            const height = 2;
+            const stride = width + 5;
+            const size = height * stride;
+
+            var tables: [3][]align(LUT_ALIGN) const u8 = undefined;
+            for (0..3) |table_index| {
+                const table = try testing.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(LUT_ALIGN), 256);
+                for (table, 0..) |*value, i| {
+                    value.* = @intCast((i * (table_index + 3)) % 256);
+                }
+                tables[table_index] = table;
+            }
+            defer for (tables) |table| testing.allocator.free(table);
+
+            var curr: [3][]const T = undefined;
+            var curr_ref: [3][]const T = undefined;
+            for (0..3) |plane| {
+                const curr_plane = try testing.allocator.alloc(T, size);
+                const curr_ref_plane = try testing.allocator.alloc(T, size);
+                for (curr_plane, 0..) |*value, i| {
+                    value.* = @intCast((i * 7 + plane * 29) % 251);
+                }
+                for (curr_ref_plane, 0..) |*value, i| {
+                    value.* = @intCast((i * 11 + plane * 37 + 17) % 251);
+                }
+                curr[plane] = curr_plane;
+                curr_ref[plane] = curr_ref_plane;
+            }
+            defer for (curr) |plane| testing.allocator.free(plane);
+            defer for (curr_ref) |plane| testing.allocator.free(plane);
+
+            var src: [MAX_RADIUS * 2][3][]const T = undefined;
+            var ref: [MAX_RADIUS * 2][3][]const T = undefined;
+            for (0..MAX_RADIUS * 2) |frame| {
+                for (0..3) |plane| {
+                    const src_plane = try testing.allocator.alloc(T, size);
+                    const ref_plane = try testing.allocator.alloc(T, size);
+                    for (src_plane, 0..) |*value, i| {
+                        value.* = @intCast((i * 13 + frame * 19 + plane * 23) % 251);
+                    }
+                    for (ref_plane, 0..) |*value, i| {
+                        value.* = @intCast((i * 17 + frame * 31 + plane * 11 + 7) % 251);
+                    }
+                    src[frame][plane] = src_plane;
+                    ref[frame][plane] = ref_plane;
+                }
+            }
+            defer for (src) |frame| for (frame) |plane| testing.allocator.free(plane);
+            defer for (ref) |frame| for (frame) |plane| testing.allocator.free(plane);
+
+            const opt: ProcessOpts = .{
+                .wmode = .sqrt,
+                .depth = 8,
+                .width_y = width,
+                .height_y = height,
+                .width_uv = width,
+                .height_uv = height,
+                .stride_y = stride,
+                .stride_uv = stride,
+                .subsampling_h = 0,
+                .subsampling_w = 0,
+            };
+
+            const scalar_u = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(scalar_u);
+            const scalar_v = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(scalar_v);
+            const vector_u = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(vector_u);
+            const vector_v = try testing.allocator.alloc(T, size);
+            defer testing.allocator.free(vector_v);
+
+            inline for ([_]comptime_int{ 1, 2, 3 }) |radius| {
+                @memset(scalar_u, 0);
+                @memset(scalar_v, 0);
+                @memset(vector_u, 0);
+                @memset(vector_v, 0);
+
+                processFrameScalar(radius, curr, curr_ref, src[0 .. radius * 2], ref[0 .. radius * 2], scalar_u, scalar_v, tables, opt);
+                processFrameVector(radius, curr, curr_ref, src[0 .. radius * 2], ref[0 .. radius * 2], vector_u, vector_v, tables, opt);
+
+                for (0..height) |row| {
+                    const start = row * stride;
+                    try testing.expectEqualSlices(T, scalar_u[start..][0..width], vector_u[start..][0..width]);
+                    try testing.expectEqualSlices(T, scalar_v[start..][0..width], vector_v[start..][0..width]);
                 }
             }
         }
