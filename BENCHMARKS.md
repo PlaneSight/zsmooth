@@ -33,6 +33,11 @@ sampling, and `--keep-worktrees` to retain temporary build trees for
 inspection. JSON and Markdown reports are written under `build/benchmarks/`,
 which is ignored by Git.
 
+The RemoveGrain matrix includes modes 13–16 and derives matching F16 cases
+from the Zsmooth F32 cases. The fixtures only construct reference-plugin
+graphs when `rg`, `std`, or `all` output is selected, so Zsmooth-only runs do
+not require those optional comparison plugins.
+
 The command requires Bun, Zig, `vspipe`, VapourSynth's Python package,
 `vspreview`, and any external plugins referenced by the selected fixtures. It
 prepends each revision's `zig-out/lib` to
