@@ -338,7 +338,10 @@ fn Cnr4(comptime T: type) type {
             const curr_ref_u: VT = vec.load(VT, curr_ref[1], uv_index);
             const curr_ref_v: VT = vec.load(VT, curr_ref[2], uv_index);
 
-            for (0..radius * 2, src, ref, temporal_weights) |i, other, other_ref, _tweight| {
+            inline for (0..radius * 2) |i| {
+                const other = src[i];
+                const other_ref = ref[i];
+                const _tweight = temporal_weights[i];
                 const tweight: VF = @splat(_tweight);
                 const other_u: VT = vec.load(VT, other[1], uv_index);
                 const other_v: VT = vec.load(VT, other[2], uv_index);
@@ -387,7 +390,7 @@ fn Cnr4(comptime T: type) type {
             var result_u: VBUAT = @splat(0);
             var result_v: VBUAT = @splat(0);
 
-            for (0..radius * 2) |i| {
+            inline for (0..radius * 2) |i| {
                 result_u += (max - abs_diffs_yu[i]) * results_u[i];
                 result_v += (max - abs_diffs_yv[i]) * results_v[i];
             }
