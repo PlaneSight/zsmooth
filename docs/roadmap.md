@@ -65,10 +65,11 @@ reports are local latency signals, not a cross-target compiler policy.
   confirms vector FP16 arithmetic in the plugin, but it is not a focused
   before/after counter or disassembly experiment for RemoveGrain addressing.
   The existing explicit row/vector loops remain clearer and are retained.
-- Clense's direct-frame FP16 comparison is blocked on this host because its
-  fixture constructs the unavailable external `rgsf.Clense` reference even
-  when only the Zsmooth output is selected. This is an environment limitation,
-  not a Zsmooth performance result.
+- The Clense fixture now creates the external RG reference only for `rg` and
+  `all` output, so standalone Zsmooth F16 cases run without `rgsf`. Its exact
+  native-F16 Normal candidate had conflicting 0.927x and 1.032x seven-sample
+  direct-frame results against widened compute; it remains opt-in until
+  full-stream evidence establishes a stable win.
 - The fat-plugin experiment is deferred. Separate Haswell, Zen 4, and AArch64
   artifacts remain the supported release model until hardware measurements
   demonstrate that coarse dispatch improves its binary-size and maintenance

@@ -68,8 +68,8 @@ fn Clense(comptime T: type) type {
             @setFloatMode(float_mode);
 
             if (comptime T == f16) {
-                // Native F16 median remains opt-in for measurement: on the
-                // profiled fullfp16 target, widened F32 was faster.
+                // Native F16 median remains opt-in for measurement: local
+                // direct-frame samples have not established a stable win.
                 return switch (@import("config").f16_simd) {
                     .scalar => clenseScalar(dstp, srcp, prev, next, width, height, stride),
                     .native => clenseF16Native(dstp, srcp, prev, next, width, height, stride),

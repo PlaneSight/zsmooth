@@ -59,8 +59,9 @@ bun benchmarks/compare_revisions.ts \
 RemoveGrain also has a `widened` experiment that loads F16 storage, evaluates
 the vector interior in F32, and narrows at the store boundary. It keeps scalar
 borders and tails and permits at most one F16 ULP from scalar storage results.
-VerticalCleaner mode 1 has an exact native-F16 median path; mode 2 and Repair
-remain on their existing F32-widened and scalar paths, respectively.
+VerticalCleaner mode 1 has an exact native-F16 median path. Clense's Normal
+mode has the same exact native candidate behind `-Df16-simd=native`, but its
+automatic path remains widened until a stable full-stream win is measured.
 
 ```sh
 bun benchmarks/compare_revisions.ts \
@@ -72,15 +73,18 @@ bun benchmarks/compare_revisions.ts \
 ```
 
 The direct-frame runs above supply bounded, target-specific evidence rather
-than a general throughput claim. `auto` enables every native-F16 vector mode
-on an AArch64 target advertising `fullfp16`; otherwise it preserves the
-curated fallback mode sets that predated this experiment. RemoveGrain's `widened`
+than a general throughput claim. `auto` enables the target-gated native-F16
+paths selected by each filter on an AArch64 target advertising `fullfp16`; it
+otherwise preserves the curated fallback mode sets. RemoveGrain's `widened`
 experiment is never selected automatically, and Repair remains scalar in that
-experiment. On this Apple M5 / Zig 0.16.0 host, three-sample direct-frame
-measurements put native RemoveGrain at 2.430x of scalar and F32 widened compute
-at 0.590x of native across ten F16 cases. A separate seven-sample comparison
+experiment.
+On this Apple M5 / Zig 0.16.0 host, three-sample direct-frame measurements put
+native RemoveGrain at 2.430x of scalar and F32 widened compute at 0.590x of
+native across ten F16 cases. A separate seven-sample comparison
 of commits `6618c60` and `b5eee37` put native VerticalCleaner mode 1 at
 1.702x of its prior F32-widened path; the two-case geometric mean was 1.285x.
+Two seven-sample Clense Normal comparisons produced conflicting 0.927x and
+1.032x native-versus-widened signals, so that native path remains opt-in.
 These results are not evidence for x86 or other AArch64 CPUs; use `--full`,
 more samples, counters, and disassembly before widening the policy.
 
