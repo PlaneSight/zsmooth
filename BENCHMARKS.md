@@ -9,7 +9,9 @@ So while the benchmarks show fast results, you'll see even faster by using Zsmoo
 `benchmarks/compare_revisions.ts` builds two detached revisions with the same
 `ReleaseFast` settings, runs the existing benchmark runner in isolated
 directories, and compares its CSV results. The default baseline is `main`;
-`master` is used automatically when no local `main` ref exists.
+`master` is used automatically when no local `main` ref exists. Direct
+single-frame timing is the default for both revisions; pass `--full` when a
+full-stream `vspipe` measurement is required.
 
 Run from the repository root:
 
@@ -17,6 +19,8 @@ Run from the repository root:
 bun benchmarks/compare_revisions.ts \
   --baseline main \
   --candidate HEAD \
+  --baseline-zig zig \
+  --candidate-zig zig \
   --filter RemoveGrain \
   --filter VerticalCleaner \
   --plugin zsmooth \
@@ -30,13 +34,26 @@ Repeat `--filter`, `--plugin`, and `--format` to select a subset. Omitting
 those options runs the complete matrix. Use `--frame-count-scale` to shorten
 fixture workloads, `--iterations` (minimum 3) and `--warmup` to control
 sampling, and `--keep-worktrees` to retain temporary build trees for
-inspection. JSON and Markdown reports are written under `build/benchmarks/`,
-which is ignored by Git.
+inspection. `--target <triple>` and `--cpu <name>` are passed as requested
+Zig build identifiers to both builds. A cross target is not promised to be
+runnable by the host VapourSynth runtime; a run can build successfully and
+then fail when its plugin is loaded.
 
-The RemoveGrain matrix includes modes 13–16 and derives matching F16 cases
-from the Zsmooth F32 cases. The fixtures only construct reference-plugin
-graphs when `rg`, `std`, or `all` output is selected, so Zsmooth-only runs do
-not require those optional comparison plugins.
+The comparison writes the legacy comparison JSON and Markdown plus
+`benchmark_comparison.metadata.json` under `build/benchmarks/` by default.
+The metadata sidecar preserves each runner's timing mode, units, raw samples,
+perf data when requested, benchmark configuration, runtime/host information,
+and the requested and actual compiler path/version. The runner itself keeps
+writing `benchmark_results.csv` and `benchmark_results.md` with their existing
+headers and columns, and adds `benchmark_results.json` without changing those
+files.
+
+The reproducibility matrix is the tuple of compiler executable and version,
+requested optimize mode, requested target/CPU identifiers, host OS/architecture
+and CPU, selected filter/plugin/format/argument case, frame-count scale,
+iteration count, warmup count, and timing mode. Reports record these inputs;
+hardware identity is metadata, not an inferred substitute for a requested
+target or CPU.
 
 The command requires Bun, Zig, `vspipe`, VapourSynth's Python package,
 `vspreview`, and any external plugins referenced by the selected fixtures. It
@@ -45,10 +62,10 @@ prepends each revision's `zig-out/lib` to
 
 ## Fast direct-frame mode
 
-For a quick relative signal, the runner defaults to fast direct-frame mode,
-which runs the selected fixture in a fresh Python process and times one
-selected output's `get_frame(frame)` request per sample. Each sample rebuilds
-the fixture graph and clears the VapourSynth cache, while warmups and measured
+For a quick relative signal, the runner defaults to direct-frame mode, which
+runs the selected fixture in a fresh Python process and times one selected
+output's `get_frame(frame)` request per sample. Each sample rebuilds the
+fixture graph and clears the VapourSynth cache, while warmups and measured
 iterations retain the normal runner policy:
 
 ```sh
@@ -62,17 +79,51 @@ bun benchmarks/run_benchmarks.ts \
   --warmup 1
 ```
 
-`--fast-frame` selects the requested frame (default `0`). Fast-mode results
-are single-frame latency converted to an FPS-shaped value; they are not
-full-stream `vspipe` throughput and should not be compared numerically with
-the normal runner's FPS. `benchmarks/compare_revisions.ts` accepts the same
-`--fast`, `--fast-python`, and `--fast-frame` options and applies them to both
-revisions.
+`--fast-frame` selects the requested frame (default `0`). Direct-mode CSV and
+Markdown values retain their historical FPS-shaped display, but each value is
+derived from single-frame latency and is not full-stream `vspipe` throughput.
+The additive JSON sidecar labels this distinction and stores the raw samples in
+milliseconds. `--full` is the explicit opt-out from direct mode:
+
+```sh
+bun benchmarks/run_benchmarks.ts --full --filter RemoveGrain --plugin zsmooth
+bun benchmarks/compare_revisions.ts --full --baseline main --candidate HEAD
+```
 
 The fast helper supplies a fallback for the fixtures' optional `vspreview`
 preview check. The selected Python runtime must still provide VapourSynth and
 any other modules imported by the fixture, and the revision's `zig-out/lib`
 must be available through `VAPOURSYNTH_EXTRA_PLUGIN_PATH`.
+
+## Optional perf counters
+
+Pass `--perf` to the runner or comparator to wrap measured processes with
+Linux `perf stat` for `cycles`, `instructions`, and `branch-misses`. Counter
+samples and aggregates are written only to the additive JSON sidecar; the
+legacy CSV/Markdown outputs do not acquire columns. This is process-level
+measurement and includes setup/teardown overhead, so it is not equivalent to
+the timed `get_frame` region. It requires Linux, an executable `perf` on
+`PATH`, and sufficient kernel permissions; the command fails clearly when
+those prerequisites are absent.
+
+## Optional disassembly capture
+
+`benchmarks/capture_disassembly.ts` intentionally requires a user-selected
+disassembler and makes no assumption that `llvm-objdump` (or any other tool)
+is installed. It does not require debug symbols:
+
+```sh
+bun benchmarks/capture_disassembly.ts \
+  --binary zig-out/lib/libzsmooth.so \
+  --disassembler objdump \
+  --arg=-d \
+  --output build/benchmarks/zsmooth.disassembly.txt \
+  --metadata-output build/benchmarks/zsmooth.disassembly.json
+```
+
+Repeat `--arg` for tool-specific flags. The helper writes the disassembler
+output and a metadata sidecar containing the requested/actual binary and
+disassembler paths, arguments, host/runtime information, and exit status.
 
 
 ## Table of Contents

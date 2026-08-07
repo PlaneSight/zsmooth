@@ -1,10 +1,29 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { hostname, release as osRelease, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { tmpdir } from 'node:os'
 
 type CliValue = string | string[] | boolean | undefined
+
+type CompilerInfo = {
+  requestedPath: string
+  actualPath: string
+  version: string
+  target: string | null
+  cpu: string | null
+}
+
+type RunnerMetadata = {
+  schemaVersion?: number
+  timing?: {
+    mode?: string
+    sampleUnit?: string
+    reportedUnit?: string
+    reportedValueSemantics?: string
+  }
+  [key: string]: unknown
+}
 
 type Revision = {
   role: 'baseline' | 'candidate'
@@ -12,8 +31,8 @@ type Revision = {
   commit: string
   worktree: string
   pluginPath: string
+  compiler: CompilerInfo
 }
-
 type Summary = {
   cases: number
   geometricMeanSpeedup: number
@@ -54,12 +73,21 @@ const { values: cliArgs } = parseArgs({
     'frame-count-scale': { type: 'string', default: '1.0' },
     iterations: { type: 'string', default: '7' },
     warmup: { type: 'string', default: '1' },
-    fast: { type: 'boolean', default: false },
+    // Direct get_frame timing is the comparator default. --fast remains
+    // accepted for compatibility with existing invocations.
+    fast: { type: 'boolean', default: true },
+    full: { type: 'boolean', default: false },
     'fast-python': { type: 'string' },
     'fast-frame': { type: 'string', default: '0' },
+    perf: { type: 'boolean', default: false },
     optimize: { type: 'string', default: 'ReleaseFast' },
+    'baseline-zig': { type: 'string', default: 'zig' },
+    'candidate-zig': { type: 'string', default: 'zig' },
+    target: { type: 'string' },
+    cpu: { type: 'string' },
     output: { type: 'string', default: 'build/benchmarks/benchmark_comparison.json' },
     'markdown-output': { type: 'string', default: 'build/benchmarks/benchmark_comparison.md' },
+    'metadata-output': { type: 'string', default: 'build/benchmarks/benchmark_comparison.metadata.json' },
     'keep-worktrees': { type: 'boolean', default: false },
     help: { type: 'boolean', default: false },
   },
@@ -95,12 +123,19 @@ Options:
   --frame-count-scale <n>      Scale fixture frame counts (default: 1.0)
   --iterations <n>             Measured iterations, minimum 3 (default: 7)
   --warmup <n>                 Warmup iterations (default: 1)
-  --fast                       Use direct get_frame timing for fast iteration
-  --fast-python <path>         Python runtime for --fast (default: $VAPOURSYNTH_PYTHON or python3)
-  --fast-frame <n>             Frame requested by --fast (default: 0)
+  --full                       Use full-stream vspipe timing instead of the default direct get_frame timing
+  --fast                       Compatibility alias for the default direct get_frame timing
+  --fast-python <path>         Python runtime for direct timing (default: $VAPOURSYNTH_PYTHON or python3)
+  --fast-frame <n>             Frame requested by direct timing (default: 0)
+  --perf                       Linux perf stat counters (cycles, instructions, branch-misses)
+  --baseline-zig <path>        Zig executable for the baseline build (default: zig)
+  --candidate-zig <path>       Zig executable for the candidate build (default: zig)
+  --target <triple>            Requested Zig target passed to both builds
+  --cpu <name>                 Requested Zig CPU passed to both builds
   --optimize <mode>            Zig optimize mode (default: ReleaseFast)
-  --output <path>              JSON output (default: build/benchmarks/benchmark_comparison.json)
-  --markdown-output <path>     Markdown output (default: build/benchmarks/benchmark_comparison.md)
+  --output <path>              Comparison JSON (default: build/benchmarks/benchmark_comparison.json)
+  --markdown-output <path>     Comparison Markdown (default: build/benchmarks/benchmark_comparison.md)
+  --metadata-output <path>     Additive raw-sample/perf sidecar (default: build/benchmarks/benchmark_comparison.metadata.json)
   --keep-worktrees             Preserve temporary worktrees for inspection
   --help                       Show this help
 `)
@@ -132,6 +167,50 @@ function tryGit(args: string[], cwd: string): string | undefined {
   } catch {
     return undefined
   }
+}
+function ensurePerfAvailable(enabled: boolean): void {
+  if (!enabled) return
+  if (process.platform !== 'linux') {
+    throw new Error('--perf is supported only on Linux; disable it on this platform')
+  }
+  const perfVersion = Bun.spawnSync(['perf', '--version'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  if (perfVersion.exitCode !== 0) {
+    throw new Error('--perf requested, but the perf executable is unavailable on PATH')
+  }
+}
+
+function resolveExecutablePath(requested: string, cwd: string): string {
+  const candidate = requested.includes('/') || requested.includes('\\')
+    ? resolve(cwd, requested)
+    : Bun.which(requested)
+  if (!candidate || !existsSync(candidate)) {
+    throw new Error(`Unable to locate executable ${requested}`)
+  }
+  return realpathSync(candidate)
+}
+
+function compilerInfo(
+  requestedPath: string,
+  invocationDir: string,
+  worktree: string,
+  target: string | null,
+  cpu: string | null,
+): CompilerInfo {
+  const actualPath = resolveExecutablePath(requestedPath, invocationDir)
+  const versionResult = runCommand(actualPath, ['version'], worktree)
+  const version = (versionResult.stdout || versionResult.stderr).trim()
+  if (!version) throw new Error(`Compiler ${actualPath} returned no version`)
+  return { requestedPath, actualPath, version, target, cpu }
+}
+
+function parseRunnerMetadata(value: unknown): RunnerMetadata {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Benchmark runner JSON sidecar must contain an object')
+  }
+  return value as RunnerMetadata
 }
 
 function resolveRevision(requested: string, repoRoot: string): { name: string; commit: string } {
@@ -273,6 +352,10 @@ function comparisonMarkdown(
     `- Candidate: \`${candidate.name}\` (${candidate.commit})`,
     `- Baseline: \`${baseline.name}\` (${baseline.commit})`,
     `- Cases: ${summary.cases}`,
+    `- Timing mode: \`${String(configuration.timingMode)}\` (reported unit: ${String(configuration.reportedUnit)})`,
+    ...(configuration.timingMode === 'direct-frame'
+      ? ['- Direct-frame values are latency-derived FPS-shaped values, not full-stream vspipe throughput.']
+      : []),
     `- Geometric-mean speedup: **${summary.geometricMeanSpeedup.toFixed(3)}x** (${summary.deltaPct >= 0 ? '+' : ''}${summary.deltaPct.toFixed(1)}%)`,
     '',
     '## Configuration',
@@ -319,21 +402,35 @@ async function main(): Promise<void> {
   const warmup = parseInteger('warmup', '1', 0)
   const frameCountScale = parseScale()
   const optimize = optionString('optimize', 'ReleaseFast') ?? 'ReleaseFast'
+  const baselineZig = optionString('baseline-zig', 'zig') ?? 'zig'
+  const candidateZig = optionString('candidate-zig', 'zig') ?? 'zig'
+  const target = optionString('target') ?? null
+  const cpu = optionString('cpu') ?? null
+  const full = cliArgs.full === true
+  const perf = cliArgs.perf === true
+  ensurePerfAvailable(perf)
   const filters = optionStrings('filter')
   const formats = optionStrings('format')
   const plugins = optionStrings('plugin')
   const keepWorktrees = Boolean(cliArgs['keep-worktrees'])
   const outputJson = resolve(invocationDir, optionString('output', 'build/benchmarks/benchmark_comparison.json') ?? 'build/benchmarks/benchmark_comparison.json')
   const outputMarkdown = resolve(invocationDir, optionString('markdown-output', 'build/benchmarks/benchmark_comparison.md') ?? 'build/benchmarks/benchmark_comparison.md')
+  const outputMetadata = resolve(invocationDir, optionString('metadata-output', 'build/benchmarks/benchmark_comparison.metadata.json') ?? 'build/benchmarks/benchmark_comparison.metadata.json')
 
   const tempRoot = mkdtempSync(join(tmpdir(), 'zsmooth-benchmark-'))
   const revisions: Revision[] = []
+
 
   try {
     for (const [role, resolved] of [['baseline', baselineResolved], ['candidate', candidateResolved]] as const) {
       const worktree = join(tempRoot, role)
       runCommand('git', ['worktree', 'add', '--detach', worktree, resolved.commit], repoRoot)
-      runCommand('zig', ['build', `-Doptimize=${optimize}`], worktree)
+      const requestedCompiler = role === 'baseline' ? baselineZig : candidateZig
+      const compiler = compilerInfo(requestedCompiler, invocationDir, worktree, target, cpu)
+      const buildArgs = ['build', `-Doptimize=${optimize}`]
+      if (target) buildArgs.push(`-Dtarget=${target}`)
+      if (cpu) buildArgs.push(`-Dcpu=${cpu}`)
+      runCommand(compiler.actualPath, buildArgs, worktree)
       const pluginPath = join(worktree, 'zig-out', 'lib')
       const pluginArtifacts = ['libzsmooth.dylib', 'libzsmooth.so', 'zsmooth.dll']
       if (!existsSync(pluginPath) || !pluginArtifacts.some((artifact) => existsSync(join(pluginPath, artifact)))) {
@@ -345,6 +442,7 @@ async function main(): Promise<void> {
         commit: resolved.commit,
         worktree,
         pluginPath,
+        compiler,
       })
     }
 
@@ -352,6 +450,7 @@ async function main(): Promise<void> {
     const candidate = revisions.find((revision) => revision.role === 'candidate')!
     const candidateBenchmarks = join(candidate.worktree, 'benchmarks')
     const runResults = new Map<string, BenchmarkResult[]>()
+    const runnerMetadata = new Map<string, RunnerMetadata>()
     const pathSeparator = process.platform === 'win32' ? ';' : ':'
 
     for (const revision of [baseline, candidate]) {
@@ -360,8 +459,21 @@ async function main(): Promise<void> {
       mkdirSync(runRoot, { recursive: true })
       cpSync(candidateBenchmarks, benchmarkDir, { recursive: true })
 
-      const runnerArgs = [join(benchmarkDir, 'run_benchmarks.ts'), '--frame-count-scale', frameCountScale.toString(), '--iterations', iterations.toString(), '--warmup', warmup.toString()]
-      if (cliArgs.fast === true) runnerArgs.push('--fast')
+      const runnerArgs = [
+        join(benchmarkDir, 'run_benchmarks.ts'),
+        '--frame-count-scale',
+        frameCountScale.toString(),
+        '--iterations',
+        iterations.toString(),
+        '--warmup',
+        warmup.toString(),
+        '--zig',
+        revision.compiler.requestedPath,
+      ]
+      if (full) runnerArgs.push('--full')
+      if (perf) runnerArgs.push('--perf')
+      if (target) runnerArgs.push('--target', target)
+      if (cpu) runnerArgs.push('--cpu', cpu)
       const fastPython = optionString('fast-python')
       if (fastPython) runnerArgs.push('--fast-python', fastPython)
       const fastFrame = optionString('fast-frame')
@@ -378,10 +490,26 @@ async function main(): Promise<void> {
       await Bun.write(join(runRoot, 'benchmark.stdout.log'), result.stdout)
       await Bun.write(join(runRoot, 'benchmark.stderr.log'), result.stderr)
       runResults.set(revision.role, parseResults(await Bun.file(join(benchmarkDir, 'benchmark_results.csv')).text()))
+      const metadataPath = join(benchmarkDir, 'benchmark_results.json')
+      if (!existsSync(metadataPath)) {
+        throw new Error(`Benchmark runner did not produce its JSON sidecar at ${metadataPath}`)
+      }
+      runnerMetadata.set(revision.role, parseRunnerMetadata(await Bun.file(metadataPath).json()))
     }
 
     const baselineResults = runResults.get('baseline')!
     const candidateResults = runResults.get('candidate')!
+    const baselineMetadata = runnerMetadata.get('baseline')!
+    const candidateMetadata = runnerMetadata.get('candidate')!
+    const timingMode = full ? 'full-stream-vspipe' : 'direct-frame'
+    const expectedSampleUnit = full ? 'fps' : 'milliseconds'
+    for (const [role, metadata] of [['baseline', baselineMetadata], ['candidate', candidateMetadata]] as const) {
+      const actualMode = metadata.timing?.mode
+      const actualUnit = metadata.timing?.sampleUnit
+      if (actualMode !== timingMode || actualUnit !== expectedSampleUnit) {
+        throw new Error(`Benchmark runner ${role} sidecar reports timing ${actualMode ?? 'unknown'}/${actualUnit ?? 'unknown'}, expected ${timingMode}/${expectedSampleUnit}`)
+      }
+    }
     const baselineByKey = new Map(baselineResults.map((result) => [result.key, result]))
     const candidateByKey = new Map(candidateResults.map((result) => [result.key, result]))
     const missingFromCandidate = baselineResults.filter((result) => !candidateByKey.has(result.key))
@@ -409,33 +537,76 @@ async function main(): Promise<void> {
     const byFilter = groupedSummary(comparisons)
     const configuration = {
       optimize,
+      timingMode,
+      sampleUnit: expectedSampleUnit,
+      reportedUnit: 'fps',
       frameCountScale,
       iterations,
       warmup,
+      full,
+      perf,
       filters,
       formats,
       plugins,
+      requestedTarget: target,
+      requestedCpu: cpu,
+      toolchains: {
+        baseline: baseline.compiler,
+        candidate: candidate.compiler,
+      },
+      host: {
+        platform: process.platform,
+        arch: process.arch,
+        osRelease: osRelease(),
+        hostname: hostname(),
+      },
+      runtime: {
+        bun: Bun.version,
+        node: process.version,
+      },
       runner: 'candidate revision benchmark runner',
     }
     const report = {
+      schemaVersion: 1,
       candidate: { requested: candidateRequested, resolved: candidate.name, commit: candidate.commit },
       baseline: { requested: baselineRequested, resolved: baseline.name, commit: baseline.commit },
       configuration,
       summary,
       byFilter,
       cases: comparisons,
+      sidecars: {
+        baseline: baselineMetadata,
+        candidate: candidateMetadata,
+      },
+    }
+    const metadataReport = {
+      schemaVersion: 1,
+      timing: {
+        mode: timingMode,
+        sampleUnit: expectedSampleUnit,
+        reportedUnit: 'fps',
+        reportedValueSemantics: full
+          ? 'full-stream vspipe throughput'
+          : 'single-frame latency converted to an FPS-shaped value; not full-stream throughput',
+      },
+      configuration,
+      baseline: baselineMetadata,
+      candidate: candidateMetadata,
     }
 
     mkdirSync(dirname(outputJson), { recursive: true })
     mkdirSync(dirname(outputMarkdown), { recursive: true })
+    mkdirSync(dirname(outputMetadata), { recursive: true })
     await Bun.write(outputJson, `${JSON.stringify(report, null, 2)}\n`)
     await Bun.write(outputMarkdown, comparisonMarkdown(candidate, baseline, comparisons, summary, byFilter, configuration))
+    await Bun.write(outputMetadata, `${JSON.stringify(metadataReport, null, 2)}\n`)
 
     console.log(`Candidate ${candidate.name} ${candidate.commit}`)
     console.log(`Baseline  ${baseline.name} ${baseline.commit}`)
     console.log(`Compared ${summary.cases} cases: ${summary.geometricMeanSpeedup.toFixed(3)}x (${summary.deltaPct >= 0 ? '+' : ''}${summary.deltaPct.toFixed(1)}%)`)
     console.log(`Wrote ${outputJson}`)
     console.log(`Wrote ${outputMarkdown}`)
+    console.log(`Wrote ${outputMetadata}`)
     if (keepWorktrees) console.log(`Kept temporary benchmark root at ${tempRoot}`)
   } finally {
     if (!keepWorktrees) {
