@@ -1315,7 +1315,7 @@ fn Repair(comptime T: type) type {
             }
         }
 
-        test "FP16 SIMD Repair modes 1-4 and 11 match scalar reference" {
+        test "FP16 SIMD Repair modes 1-4 and 11-14 match scalar reference" {
             if (comptime T != f16) return;
 
             const vector_len = vec.getVecSize(T);
@@ -1346,7 +1346,7 @@ fn Repair(comptime T: type) type {
                     pixel.* = @floatFromInt((i * 29 + 3) % 251);
                 }
 
-                inline for ([_]comptime_int{ 1, 2, 3, 4, 11 }) |mode| {
+                inline for ([_]comptime_int{ 1, 2, 3, 4, 11, 12, 13, 14 }) |mode| {
                     inline for ([_]bool{ false, true }) |chroma| {
                         @memset(scalar, 0);
                         @memset(simd, 0);
@@ -1361,7 +1361,7 @@ fn Repair(comptime T: type) type {
             }
         }
 
-        test "FP16 SIMD Repair modes 2-4 preserve tie order" {
+        test "FP16 SIMD Repair modes 12-14 preserve tie order" {
             if (comptime T != f16) return;
 
             const V = @Vector(4, T);
@@ -1377,9 +1377,9 @@ fn Repair(comptime T: type) type {
                 .bottom_right = @as(V, .{ 4, 4, 4, 4 }),
             };
 
-            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), repairVector(2, V, grid.center_center, grid, false));
-            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), repairVector(3, V, grid.center_center, grid, false));
-            try testing.expectEqual(@as(V, .{ 5, 5, 5, 7 }), repairVector(4, V, grid.center_center, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), repairVector(12, V, grid.center_center, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), repairVector(13, V, grid.center_center, grid, false));
+            try testing.expectEqual(@as(V, .{ 5, 5, 5, 5 }), repairVector(14, V, grid.center_center, grid, false));
         }
 
         fn processPlane(mode: u5, chroma: bool, noalias dstp8: []u8, noalias srcp8: []const u8, noalias repairp8: []const u8, width: usize, height: usize, stride8: usize) void {
@@ -1392,7 +1392,8 @@ fn Repair(comptime T: type) type {
             switch (mode) {
                 inline 1...4 => |m| processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
                 11 => processPlaneVector(11, chroma, srcp, repairp, dstp, width, height, stride),
-                inline 5...10, 12...24 => |m| if (comptime T == f16)
+                inline 12...14 => |m| processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
+                inline 5...10, 15...24 => |m| if (comptime T == f16)
                     processPlaneScalar(m, srcp, repairp, dstp, width, height, stride, chroma)
                 else
                     processPlaneVector(m, chroma, srcp, repairp, dstp, width, height, stride),
