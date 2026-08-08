@@ -56,12 +56,14 @@ if output in ['rg', 'all']:
         else:
             rg = clip.rgsf.BackwardClense()
 
+zsmooth_plugin = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16'))
+
 if function == 'Clense': 
-    zsmooth = clip.zsmooth.Clense()
+    zsmooth = zsmooth_plugin.Clense()
 elif function == 'ForwardClense':
-    zsmooth = clip.zsmooth.ForwardClense()
+    zsmooth = zsmooth_plugin.ForwardClense()
 else:
-    zsmooth = clip.zsmooth.BackwardClense()
+    zsmooth = zsmooth_plugin.BackwardClense()
 
 match output:
     case 'zsmooth':

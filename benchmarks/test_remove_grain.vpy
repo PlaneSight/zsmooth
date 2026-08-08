@@ -54,7 +54,7 @@ if output in ['std', 'all']:
     if mode == "20":
         std = clip.std.Convolution(matrix=[1, 1, 1, 1, 1, 1, 1, 1, 1])
 
-zsmooth = clip.zsmooth.RemoveGrain(mode)
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).RemoveGrain(mode)
 
 match output:
     case 'zsmooth':

@@ -44,7 +44,7 @@ if format != 'f16':
     if output in ['tmedian', 'all']:
         tmedian = clip.tmedian.TemporalMedian(radius=radius)
 
-zsmooth = clip.zsmooth.TemporalMedian(radius=radius, scenechange=scenechange)
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).TemporalMedian(radius=radius, scenechange=scenechange)
 
 match output:
     case 'zsmooth':

@@ -39,6 +39,12 @@ Zig build identifiers to both builds. A cross target is not promised to be
 runnable by the host VapourSynth runtime; a run can build successfully and
 then fail when its plugin is loaded.
 
+The SIMD/F16 performance branch uses `zsmooth_simd_f16`, while main uses
+`zsmooth`. The comparator passes those namespaces to the candidate and
+baseline fixtures respectively. Override them with
+`--candidate-zsmooth-namespace` or `--baseline-zsmooth-namespace` when
+comparing builds with different registrations.
+
 For same-source configuration experiments, repeat
 `--baseline-build-option` or `--candidate-build-option`. The comparator permits
 the two roles to resolve to the same commit only when their ordered build-option

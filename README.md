@@ -61,6 +61,15 @@ pip install -U vapoursynth-zsmooth
 
 Otherwise, individual binaries can be downloaded from the [Releases](https://github.com/adworacz/zsmooth/releases) page.
 
+### Co-installing the SIMD/F16 performance branch
+
+This branch registers as `core.zsmooth_simd_f16` with the unique plugin
+identifier `com.adub.zsmooth.simd_f16`, so it can be loaded alongside the
+released/main plugin at `core.zsmooth`. Keep the two libraries in distinct
+plugin directories and add both directories to VapourSynth's plugin search
+path.
+
+
 ## Function Documentation
 ### CCD
 CCD, aka Camcorder Color Denoiser, is an excellent chroma denoiser originally written by 

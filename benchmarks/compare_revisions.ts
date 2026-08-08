@@ -88,6 +88,14 @@ const { values: cliArgs } = parseArgs({
     'baseline-build-option': { type: 'string', multiple: true },
     'candidate-build-option': { type: 'string', multiple: true },
 
+    "baseline-zsmooth-namespace": {
+      type: 'string',
+      default: 'zsmooth',
+    },
+    "candidate-zsmooth-namespace": {
+      type: 'string',
+      default: 'zsmooth_simd_f16',
+    },
     target: { type: 'string' },
     cpu: { type: 'string' },
     output: { type: 'string', default: 'build/benchmarks/benchmark_comparison.json' },
@@ -138,6 +146,9 @@ Options:
   --candidate-zig <path>       Zig executable for the candidate build (default: zig)
   --baseline-build-option <arg>  Repeat to pass an additional Zig build option to baseline
   --candidate-build-option <arg> Repeat to pass an additional Zig build option to candidate
+  --baseline-zsmooth-namespace <name>  Plugin namespace used by the baseline fixtures (default: zsmooth)
+  --candidate-zsmooth-namespace <name> Plugin namespace used by the candidate fixtures (default: zsmooth_simd_f16)
+
 
   --target <triple>            Requested Zig target passed to both builds
   --cpu <name>                 Requested Zig CPU passed to both builds
@@ -403,6 +414,8 @@ async function main(): Promise<void> {
   const candidateRequested = optionString('candidate', 'HEAD') ?? 'HEAD'
   const baselineBuildOptions = optionStrings('baseline-build-option')
   const candidateBuildOptions = optionStrings('candidate-build-option')
+  const baselineZsmoothNamespace = optionString('baseline-zsmooth-namespace', 'zsmooth') ?? 'zsmooth'
+  const candidateZsmoothNamespace = optionString('candidate-zsmooth-namespace', 'zsmooth_simd_f16') ?? 'zsmooth_simd_f16'
   const baselineResolved = resolveRevision(baselineRequested, repoRoot)
   const candidateResolved = resolveRevision(candidateRequested, repoRoot)
   const sameBuildOptions = baselineBuildOptions.length === candidateBuildOptions.length
@@ -486,6 +499,10 @@ async function main(): Promise<void> {
         '--zig',
         revision.compiler.requestedPath,
       ]
+      runnerArgs.push(
+        '--zsmooth-namespace',
+        revision.role === 'baseline' ? baselineZsmoothNamespace : candidateZsmoothNamespace,
+      )
       if (full) runnerArgs.push('--full')
       if (perf) runnerArgs.push('--perf')
       if (target) runnerArgs.push('--target', target)
@@ -564,6 +581,10 @@ async function main(): Promise<void> {
       filters,
       formats,
       plugins,
+      pluginNamespaces: {
+        baseline: baselineZsmoothNamespace,
+        candidate: candidateZsmoothNamespace,
+      },
       requestedTarget: target,
       requestedCpu: cpu,
       buildOptions: {

@@ -38,7 +38,7 @@ match format:
 
 clip.set_output(0)
 
-zsmooth = clip.zsmooth.InterQuartileMean(int(radius))
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).InterQuartileMean(int(radius))
 
 match output:
     case 'zsmooth':

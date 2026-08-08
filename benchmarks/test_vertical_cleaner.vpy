@@ -46,7 +46,7 @@ if output in ['rg', 'all']:
         # # Note - RGSF uses double precision for some modes, which might be part of the reason for certain differences.
         rg = clip.rgsf.VerticalCleaner(mode)
 
-zsmooth = clip.zsmooth.VerticalCleaner(mode)
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).VerticalCleaner(mode)
 
 match output:
     case 'zsmooth':

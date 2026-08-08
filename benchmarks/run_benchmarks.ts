@@ -65,6 +65,10 @@ const { values: cliArgs } = parseArgs({
     cpu: {
       type: "string",
     },
+    "zsmooth-namespace": {
+      type: "string",
+      default: "zsmooth_simd_f16",
+    },
     "json-output": {
       type: "string",
       default: "benchmark_results.json",
@@ -85,6 +89,7 @@ Usage:
 Options:
   --filter <name>              Repeat to select filters
   --plugin <name>              Repeat to select plugins
+  --zsmooth-namespace <name>   Plugin namespace for Zsmooth fixture calls (default: zsmooth_simd_f16)
   --format <name>              Repeat to select formats
   --frame-count-scale <n>      Scale fixture frame counts (default: 1.0)
   --iterations <n>             Measured iterations, minimum 3 (default: 7)
@@ -116,6 +121,7 @@ const FAST_PYTHON = typeof cliArgs['fast-python'] === 'string'
   ? cliArgs['fast-python']
   : process.env.VAPOURSYNTH_PYTHON ?? 'python3'
 const FAST_FRAME = Number.parseInt(cliArgs['fast-frame'] as string, 10)
+const ZSMOOTH_NAMESPACE = (cliArgs['zsmooth-namespace'] as string).trim()
 const PERF_MODE = cliArgs.perf === true
 const REQUESTED_COMPILER = typeof cliArgs.zig === 'string' ? cliArgs.zig : null
 const REQUESTED_TARGET = typeof cliArgs.target === 'string' ? cliArgs.target : null
@@ -134,6 +140,9 @@ if (!Number.isSafeInteger(WARMUP_ITERATIONS) || WARMUP_ITERATIONS < 0) {
 }
 if (FAST_MODE && (!Number.isSafeInteger(FAST_FRAME) || FAST_FRAME < 0)) {
   throw new Error('--fast-frame must be a non-negative integer')
+}
+if (!ZSMOOTH_NAMESPACE) {
+  throw new Error('--zsmooth-namespace must not be empty')
 }
 
 const PERF_EVENTS = ['cycles', 'instructions', 'branch-misses'] as const
@@ -656,7 +665,7 @@ for (const filter of benchmarksToRun) {
     const fpsValues: number[] = []
     const rawSamples: number[] = []
     const perfSamples: PerfSample[] = []
-    const args = [`output=${spec.plugin}`, `format=${spec.format}`].concat(spec.args)
+    const args = [`output=${spec.plugin}`, `format=${spec.format}`, `zsmooth_namespace=${ZSMOOTH_NAMESPACE}`].concat(spec.args)
     const vspipeArgs = [
       ...args.flatMap((arg) => ['-a', arg]),
       '-e',
@@ -886,6 +895,7 @@ const sidecar = {
     frame: FAST_MODE ? FAST_FRAME : null,
     filters: cliArgs.filter ?? null,
     plugins: cliArgs.plugin ?? null,
+    zsmoothNamespace: ZSMOOTH_NAMESPACE,
     formats: cliArgs.format ?? null,
     full: !FAST_MODE,
     perf: PERF_MODE,

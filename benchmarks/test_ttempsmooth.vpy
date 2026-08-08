@@ -52,7 +52,7 @@ if format != 'f16':
     if output in ['ttmpsm', 'all']:
         ttempsmooth = clip.ttmpsm.TTempSmooth(maxr=radius, thresh=threshold, mdiff=mdiff, strength=strength, fp=fp, scthresh=0)
 
-zsmooth = clip.zsmooth.TTempSmooth(maxr=radius, thresh=threshold, mdiff=mdiff, strength=strength, fp=fp, scthresh=0)
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).TTempSmooth(maxr=radius, thresh=threshold, mdiff=mdiff, strength=strength, fp=fp, scthresh=0)
 
 match output:
     case 'zsmooth':

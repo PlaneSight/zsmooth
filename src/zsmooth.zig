@@ -21,7 +21,7 @@ const cnr4 = @import("cnr4.zig");
 const version = @import("config").version;
 
 export fn VapourSynthPluginInit2(plugin: *vs.Plugin, vsapi: *const vs.PLUGINAPI) void {
-    _ = vsapi.configPlugin.?("com.adub.zsmooth", "zsmooth", "Smoothing functions in Zig", vs.makeVersion(version.major, version.minor), vs.VAPOURSYNTH_API_VERSION, 0, plugin);
+    _ = vsapi.configPlugin.?("com.adub.zsmooth.simd_f16", "zsmooth_simd_f16", "Smoothing functions in Zig (SIMD/F16 performance branch)", vs.makeVersion(version.major, version.minor), vs.VAPOURSYNTH_API_VERSION, 0, plugin);
 
     temporalMedian.registerFunction(plugin, vsapi);
     temporalSoften.registerFunction(plugin, vsapi);

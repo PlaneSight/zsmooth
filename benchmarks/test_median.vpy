@@ -42,7 +42,7 @@ clip.set_output(0)
 if output in ['std', 'all']:
     std = clip.std.Median()
 
-zsmooth = clip.zsmooth.Median(int(radius))
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).Median(int(radius))
 
 match output:
     case 'zsmooth':

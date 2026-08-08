@@ -43,12 +43,13 @@ clip.set_output(0)
 smoothed = clip
 smoothed.set_output(8)
 
-zsmooth = smoothed.zsmooth.TemporalRepair(clip, mode)
-smoothed.zsmooth.TemporalRepair(clip, 0).set_output(3)
-smoothed.zsmooth.TemporalRepair(clip, 1).set_output(4)
-smoothed.zsmooth.TemporalRepair(clip, 2).set_output(5)
-smoothed.zsmooth.TemporalRepair(clip, 3).set_output(6)
-smoothed.zsmooth.TemporalRepair(clip, 4).set_output(7)
+zsmooth_plugin = getattr(smoothed, globals().get('zsmooth_namespace', 'zsmooth_simd_f16'))
+zsmooth = zsmooth_plugin.TemporalRepair(clip, mode)
+zsmooth_plugin.TemporalRepair(clip, 0).set_output(3)
+zsmooth_plugin.TemporalRepair(clip, 1).set_output(4)
+zsmooth_plugin.TemporalRepair(clip, 2).set_output(5)
+zsmooth_plugin.TemporalRepair(clip, 3).set_output(6)
+zsmooth_plugin.TemporalRepair(clip, 4).set_output(7)
 
 match output:
     case 'zsmooth':

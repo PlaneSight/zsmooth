@@ -40,7 +40,7 @@ from vstools import depth
 clip.set_output(0)
 
 threshold = 50
-zsmooth = clip.zsmooth.SmartMedian(radius, threshold, scalep=True)
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).SmartMedian(radius, threshold, scalep=True)
 
 match output:
     case 'zsmooth':

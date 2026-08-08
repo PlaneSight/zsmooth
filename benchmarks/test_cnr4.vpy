@@ -62,7 +62,7 @@ if output in ['cnr2', 'all']:
 # clip = sc_detect(clip)
 
 # 7394
-zsmooth = clip.zsmooth.Cnr4(mode='oxx', scenechange=False, tmode=tmode, wmode=1, sense=sense, str=str, radius=radius)
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).Cnr4(mode='oxx', scenechange=False, tmode=tmode, wmode=1, sense=sense, str=str, radius=radius)
 
 match output:
     case 'zsmooth':

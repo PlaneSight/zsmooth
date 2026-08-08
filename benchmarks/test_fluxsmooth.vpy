@@ -46,10 +46,12 @@ if output in ['flux', 'all']:
         else: 
             flux = clip.flux.SmoothST(temporal_threshold=threshold, spatial_threshold=threshold)
 
+zsmooth_plugin = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16'))
+
 if function == 'FluxSmoothT':
-    zsmooth = clip.zsmooth.FluxSmoothT(scalep=True, temporal_threshold=threshold);
+    zsmooth = zsmooth_plugin.FluxSmoothT(scalep=True, temporal_threshold=threshold);
 else:
-    zsmooth = clip.zsmooth.FluxSmoothST(scalep=True, temporal_threshold=threshold, spatial_threshold=threshold)
+    zsmooth = zsmooth_plugin.FluxSmoothST(scalep=True, temporal_threshold=threshold, spatial_threshold=threshold)
 
 match output:
     case 'flux':

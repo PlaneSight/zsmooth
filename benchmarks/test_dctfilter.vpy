@@ -44,7 +44,7 @@ clip.set_output(0)
 if output in ['dctf', 'all']:
     dctf = clip.dctf.DCTFilter([1,0,0,0,0,0,0,0])
 
-zsmooth = clip.zsmooth.DCTFilter([1,0,0,0,0,0,0,0])
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).DCTFilter([1,0,0,0,0,0,0,0])
 
 match output:
     case 'zsmooth':

@@ -36,7 +36,7 @@ clip.set_output(0)
 
 std = clip.std.AverageFrames(weights= [1] * (int(radius) * 2 + 1))
 
-zsmooth = clip.zsmooth.TemporalSoften(radius=radius);
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).TemporalSoften(radius=radius);
 
 match output:
     case 'zsmooth':

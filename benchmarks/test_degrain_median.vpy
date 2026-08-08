@@ -43,7 +43,7 @@ if output in ['dgm', 'all']:
     if clip.format.sample_type == vs.INTEGER:
         dgm = clip.dgm.DegrainMedian(limit=limit, mode=mode, interlaced=interlaced, norow=norow)
 
-zsmooth = clip.zsmooth.DegrainMedian(limit=limit, mode=mode, scalep=True, interlaced=interlaced, norow=norow)
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).DegrainMedian(limit=limit, mode=mode, scalep=True, interlaced=interlaced, norow=norow)
 
 match output:
     case 'zsmooth':

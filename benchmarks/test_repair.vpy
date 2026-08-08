@@ -48,7 +48,7 @@ if output in ['rg', 'all']:
         # RGSF uses double precision for some modes, which may affect differences.
         rg = clip.rgsf.Repair(repair_clip, mode)
 
-zsmooth = clip.zsmooth.Repair(repair_clip, mode)
+zsmooth = getattr(clip, globals().get('zsmooth_namespace', 'zsmooth_simd_f16')).Repair(repair_clip, mode)
 
 match output:
     case 'zsmooth':
